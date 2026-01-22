@@ -69,9 +69,9 @@ const researcherNode: GraphNode<typeof State> = async (state) => {
 const TOOL_NODE = "toolNode" as const;
 const toolNode: GraphNode<typeof State> = async (state) => {
   const lastMessage = state.messages.at(-1);
-  if (lastMessage === null || !AIMessage.isInstance(lastMessage)) {
-    return { messages: [] };
-  }
+
+  const hasNoAIResponse = !lastMessage || !AIMessage.isInstance(lastMessage);
+  if (hasNoAIResponse) return { messages: [] };
 
   const result: ToolMessage[] = [];
   for (const toolCall of lastMessage.tool_calls ?? []) {
@@ -91,14 +91,11 @@ const shouldContinueRouter = (
 ): typeof END | typeof TOOL_NODE => {
   const lastMessage = state.messages.at(-1);
 
-  if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
-    return END;
-  }
+  const hasNoAIResponse = !lastMessage || !AIMessage.isInstance(lastMessage);
+  if (hasNoAIResponse) return END;
 
   const hasToolCalls = lastMessage.tool_calls?.length;
-  if (hasToolCalls) {
-    return TOOL_NODE;
-  }
+  if (hasToolCalls) return TOOL_NODE;
 
   return END;
 };
