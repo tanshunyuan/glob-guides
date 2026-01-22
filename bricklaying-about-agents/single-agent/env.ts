@@ -7,6 +7,7 @@ dotenv.config()
 export const env = createEnv({
   server: {
     OPENAI_API_KEY: z.string().min(1),
+    TAVILY_API_KEY: z.string().min(1)
   },
   runtimeEnv: process.env,
 });
