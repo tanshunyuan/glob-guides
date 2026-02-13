@@ -1,8 +1,17 @@
-import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
-import { createAgent, SystemMessage, tool, humanInTheLoopMiddleware } from "langchain";
 import { env } from "../../env.js";
-import { z } from "zod";
+import {
+  Command,
+  END,
+  GraphNode,
+  MemorySaver,
+  MessagesValue,
+  START,
+  StateGraph,
+  StateSchema,
+} from "@langchain/langgraph";
+import { SystemMessage, HumanMessage } from "langchain";
+import z from "zod";
 
 const llm = new ChatOpenAI({
   model: "gpt-4.1-mini",
@@ -11,64 +20,65 @@ const llm = new ChatOpenAI({
   streaming: true,
 });
 
-const RESEARCHER_SYSTEM_MESSAGE = new SystemMessage(`
-  You are a research assistant that helps users find and synthesize information on any topic.
+const overallState = new StateSchema({
+  messages: MessagesValue,
+  objective: z.string(),
+});
+type OverallState = typeof overallState;
 
-  When given a research question:
-  1. Use Tavily to search for relevant information (typically 2-4 searches)
-  2. Synthesize findings into a clear, concise response
-  3. Include source links in your answer
-  4. If the question is unclear, ask for clarification before searching
+const CONVERSATION_NODE = "conversationNode";
+const conversationNode: GraphNode<OverallState> = async (state, config) => {
+  const schema = z.object({
+    reason: z.string(),
+    objective: z.string().nullable(),
+    isVague: z.boolean(),
+  });
+  const model = new ChatOpenAI({
+    model: "gpt-4.1-mini",
+    apiKey: env.OPENAI_API_KEY,
+    streaming: true,
+  }).withStructuredOutput(schema, {
+    includeRaw: true
+  });
+  const systemPrompt = new SystemMessage(`
+    your goal is to ask user question to make sure they know what they're asking for,
+    before heading to the next step. this is to ensure the planner comes up with the most
+    accurate plan relavent for the user.
+    `);
+  const response = await model.invoke([systemPrompt, ...state.messages]);
 
-  Guidelines:
-  - Prioritize recent sources when timeliness matters
-  - Present multiple perspectives for debated topics
-  - Be transparent about conflicting information or gaps in available data
-  - Keep responses focused on answering the specific question asked
-  `);
-
-const readEmailTool = tool(
-  (emailId: string) => `Email content for ID: ${emailId}`,
-  {
-    name: "readEmailTool",
-    schema: z.string(),
-  },
-);
-
-const sendEmailTool = tool(
-  ({
-    recipient,
-    subject,
-    body,
-  }: {
-    recipient: string;
-    subject: string;
-    body: string;
-  }) => `Email sent to ${recipient} with subject '${subject}'`,
-  {
-    name: "sendEmailTool",
-    schema: z.object({
-      recipient: z.string(),
-      subject: z.string(),
-      body: z.string(),
-    }),
-  },
-);
-
-const memory = new MemorySaver();
-export const agent = createAgent({
-  model: llm,
-  tools: [readEmailTool, sendEmailTool],
-  middleware: [
-    humanInTheLoopMiddleware({
-      interruptOn: {
-        sendEmailTool: {
-          allowedDecisions: ["approve", "edit", "reject"],
-        },
-        readEmailTool: false,
+  if (response.parsed.isVague && !response.parsed.objective) {
+    return new Command({
+      update: {
+        messages: response.parsed.reason,
       },
-    }),
-  ],
-  systemPrompt: RESEARCHER_SYSTEM_MESSAGE,
-  checkpointer: memory,
+      goto: END,
+    });
+  } else {
+    return new Command({
+      update: {
+        messages: response.parsed.reason,
+        objective: response.parsed.objective,
+      },
+      goto: PLANNER_NODE,
+    });
+  }
+};
+
+const PLANNER_NODE = "plannerNode";
+const plannerNode: GraphNode<OverallState> = async (state) => {
+  console.log("at plannerNode");
+  return state;
+};
+
+const workflow = new StateGraph(overallState)
+  .addNode(CONVERSATION_NODE, conversationNode, {
+    ends: [PLANNER_NODE, END],
+  })
+  .addNode(PLANNER_NODE, plannerNode)
+  .addEdge(START, CONVERSATION_NODE)
+  .addEdge(PLANNER_NODE, END);
+
+export const agent = workflow.compile({
+  checkpointer: new MemorySaver(),
 });

@@ -35,10 +35,10 @@ const useMessages = () => {
   const [interruptData, setInterruptData] = useState<HITLRequest | undefined>(
     undefined,
   );
-  // const [input, setInput] = useState("");
-  const [input, setInput] = useState(
-    "can you send out an email to jane for meme@test.com and the content is you are a meme",
-  );
+  const [input, setInput] = useState("");
+  // const [input, setInput] = useState(
+  //   "can you send out an email to jane for meme@test.com and the content is you are a meme",
+  // );
   const resumeInterrupt = async (data: HITLResponse) => {
     const response = await agent.stream(
       new Command({
