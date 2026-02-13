@@ -19,6 +19,8 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.0",
     "ink": "^6.7.0",
+    "ink-form": "^2.0.1",
+    "ink-tab": "^5.2.0",
     "ink-text-input": "^6.0.0",
     "langchain": "^1.2.15",
     "react": "^19.2.4",

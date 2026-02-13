@@ -1,14 +1,15 @@
 import { MemorySaver } from "@langchain/langgraph";
-import { ChatOpenAI } from "@langchain/openai"
-import { createAgent, SystemMessage } from "langchain";
+import { ChatOpenAI } from "@langchain/openai";
+import { createAgent, SystemMessage, tool, humanInTheLoopMiddleware } from "langchain";
 import { env } from "../../env.js";
+import { z } from "zod";
 
 const llm = new ChatOpenAI({
-  model: 'gpt-4.1-mini',
+  model: "gpt-4.1-mini",
   // model: 'gpt-5-nano',
   apiKey: env.OPENAI_API_KEY,
-  streaming: true
-})
+  streaming: true,
+});
 
 const RESEARCHER_SYSTEM_MESSAGE = new SystemMessage(`
   You are a research assistant that helps users find and synthesize information on any topic.
@@ -26,9 +27,48 @@ const RESEARCHER_SYSTEM_MESSAGE = new SystemMessage(`
   - Keep responses focused on answering the specific question asked
   `);
 
-const memory = new MemorySaver()
+const readEmailTool = tool(
+  (emailId: string) => `Email content for ID: ${emailId}`,
+  {
+    name: "readEmailTool",
+    schema: z.string(),
+  },
+);
+
+const sendEmailTool = tool(
+  ({
+    recipient,
+    subject,
+    body,
+  }: {
+    recipient: string;
+    subject: string;
+    body: string;
+  }) => `Email sent to ${recipient} with subject '${subject}'`,
+  {
+    name: "sendEmailTool",
+    schema: z.object({
+      recipient: z.string(),
+      subject: z.string(),
+      body: z.string(),
+    }),
+  },
+);
+
+const memory = new MemorySaver();
 export const agent = createAgent({
   model: llm,
+  tools: [readEmailTool, sendEmailTool],
+  middleware: [
+    humanInTheLoopMiddleware({
+      interruptOn: {
+        sendEmailTool: {
+          allowedDecisions: ["approve", "edit", "reject"],
+        },
+        readEmailTool: false,
+      },
+    }),
+  ],
   systemPrompt: RESEARCHER_SYSTEM_MESSAGE,
-  checkpointer: memory
-})
+  checkpointer: memory,
+});
