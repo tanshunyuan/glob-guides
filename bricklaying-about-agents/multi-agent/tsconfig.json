@@ -8,7 +8,7 @@
     "resolveJsonModule": true,
     "moduleDetection": "force",
     "isolatedModules": true,
-    "verbatimModuleSyntax": true,
+    // "verbatimModuleSyntax": true,
 
     /* Strictness */
     "strict": true,
@@ -19,8 +19,8 @@
     "module": "NodeNext",
     "outDir": "dist",
     "sourceMap": true,
-
+    "jsx": "react-jsx",
     "lib": ["es2022"],
   },
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules", "dist"],
 }
