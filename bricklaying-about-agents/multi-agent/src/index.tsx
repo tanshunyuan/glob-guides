@@ -49,6 +49,7 @@ const useMessages = () => {
       }),
       {
         streamMode: ["messages", "updates"],
+        // subgraphs: true,
         configurable: {
           thread_id: "1234",
         },
@@ -318,4 +319,6 @@ const UserInteraction = () => {
   );
 };
 
-render(<UserInteraction />);
+render(<UserInteraction />, {
+  // patchConsole: false,
+});

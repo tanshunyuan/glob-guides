@@ -16,20 +16,18 @@ import {
   HumanMessage,
   HITLRequest,
   HITLResponse,
+  AIMessage,
+  BaseMessage,
 } from "langchain";
 import z from "zod";
-
-const llm = new ChatOpenAI({
-  model: "gpt-4.1-mini",
-  // model: 'gpt-5-nano',
-  apiKey: env.OPENAI_API_KEY,
-  streaming: true,
-});
 
 const overallState = new StateSchema({
   messages: MessagesValue,
   objective: z.string(),
   plan: z.array(z.string()),
+  // rawResults: z.record(z.string(), z.string()),
+  rawResults: z.record(z.string(), z.custom<BaseMessage>()),
+  result: z.string()
 });
 type OverallState = typeof overallState;
 
@@ -139,10 +137,47 @@ const humanApprovalNode: GraphNode<OverallState> = async (
 };
 
 const EXECUTOR_NODE = "executorNode";
-const executorNode: GraphNode<OverallState> = (state) => {
+const executorNode: GraphNode<OverallState> = async (state, config) => {
   console.log("at executorNode");
-  console.log(state);
-  return {};
+  const result: Record<string, AIMessage> = {};
+  for (const task of state.plan) {
+    console.log(`searching on ${task}`);
+    const response = await researcherAgent.invoke({
+      task,
+    });
+    result[task] = response.result;
+  }
+  console.log(result);
+  return new Command({
+    update: {
+      rawResults: result,
+    },
+  });
+};
+
+const SUMMARISE_NODE = "summariseNode";
+const summariseNode: GraphNode<OverallState> = async (state, config) => {
+  console.log("at summariseNode");
+  const allRawResults = Object.values(state.rawResults);
+  const allResults = allRawResults.map(item => item.content)
+  const model = new ChatOpenAI({
+    model: "gpt-4.1-mini",
+    apiKey: env.OPENAI_API_KEY,
+    streaming: true,
+  })
+  const systemPrompt = new SystemMessage(`
+    you are a synthesizer, you take in all this information and respond with the final thing
+    `);
+  const response = await model.invoke([
+    systemPrompt,
+    new HumanMessage(allResults.join('\n'))
+  ])
+  console.log(response)
+  return new Command({
+    update: {
+      result: response.content as string
+    }
+  });
 };
 
 const workflow = new StateGraph(overallState)
@@ -154,11 +189,56 @@ const workflow = new StateGraph(overallState)
     ends: [EXECUTOR_NODE, END],
   })
   .addNode(EXECUTOR_NODE, executorNode)
+  .addNode(SUMMARISE_NODE, summariseNode)
   .addEdge(START, CONVERSATION_NODE)
   .addEdge(PLANNER_NODE, HUMAN_APPOVAL_NODE)
   .addEdge(HUMAN_APPOVAL_NODE, EXECUTOR_NODE)
-  .addEdge(EXECUTOR_NODE, END);
+  .addEdge(EXECUTOR_NODE, SUMMARISE_NODE)
+  .addEdge(SUMMARISE_NODE, END);
 
 export const agent = workflow.compile({
   checkpointer: new MemorySaver(),
 });
+
+const researcherState = new StateSchema({
+  messages: MessagesValue,
+  task: z.string(),
+  // result: z.string(),
+  result: z.custom<AIMessage>(),
+});
+const researcherAgent = new StateGraph(researcherState)
+  .addNode("researcherNode", async (state) => {
+    const model = new ChatOpenAI({
+      model: "gpt-4.1-mini",
+      apiKey: env.OPENAI_API_KEY,
+      streaming: true,
+    });
+    const RESEARCHER_SYSTEM_MESSAGE = new SystemMessage(`
+      You are a research assistant that helps users find and synthesize information on any topic.
+
+      When given a research question:
+      1. Synthesize findings into a clear, concise response
+      2. Include source links in your answer
+
+      Guidelines:
+      - Prioritize recent sources when timeliness matters
+      - Present multiple perspectives for debated topics
+      - Be transparent about conflicting information or gaps in available data
+      - Keep responses focused on answering the specific question asked
+      `);
+
+    const response = await model.invoke([
+      RESEARCHER_SYSTEM_MESSAGE,
+      new HumanMessage(state.task),
+    ]);
+
+    return new Command({
+      update: {
+        result: response,
+      },
+    });
+  })
+  // .addNode('tool')
+  .addEdge(START, "researcherNode")
+  .addEdge("researcherNode", END)
+  .compile();
