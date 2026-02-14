@@ -35,7 +35,10 @@ const useMessages = () => {
   const [interruptData, setInterruptData] = useState<HITLRequest | undefined>(
     undefined,
   );
-  const [input, setInput] = useState("");
+  // const [input, setInput] = useState("");
+  const [input, setInput] = useState(
+    "can you help me find the recent feats of kilian jornet",
+  );
   // const [input, setInput] = useState(
   //   "can you send out an email to jane for meme@test.com and the content is you are a meme",
   // );
@@ -153,6 +156,7 @@ const useMessages = () => {
 
       if (mode === "updates") {
         if ("__interrupt__" in chunk) {
+          console.log("interrupt chunk ", chunk);
           const interruptContent = chunk[
             "__interrupt__"
           ] as unknown as Interrupt<HITLRequest>[];
