@@ -25,9 +25,11 @@ const overallState = new StateSchema({
   messages: MessagesValue,
   objective: z.string(),
   plan: z.array(z.string()),
-  // rawResults: z.record(z.string(), z.string()),
-  rawResults: z.record(z.string(), z.custom<BaseMessage>()),
-  result: z.string()
+  rawResults: z.record(
+    z.string(),
+    z.custom<AIMessage>((val) => val instanceof AIMessage),
+  ),
+  result: z.string(),
 });
 type OverallState = typeof overallState;
 
@@ -86,7 +88,7 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
 
     objective: ${state.objective}
 
-    limit yourself to three plans
+    limit yourself to one plans
     `);
   const response = await model.invoke([systemPrompt, ...state.messages]);
 
@@ -147,7 +149,6 @@ const executorNode: GraphNode<OverallState> = async (state, config) => {
     });
     result[task] = response.result;
   }
-  console.log(result);
   return new Command({
     update: {
       rawResults: result,
@@ -159,24 +160,24 @@ const SUMMARISE_NODE = "summariseNode";
 const summariseNode: GraphNode<OverallState> = async (state, config) => {
   console.log("at summariseNode");
   const allRawResults = Object.values(state.rawResults);
-  const allResults = allRawResults.map(item => item.content)
+  const allResults = allRawResults.map((item) => item.content);
   const model = new ChatOpenAI({
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
     streaming: true,
-  })
+  });
   const systemPrompt = new SystemMessage(`
     you are a synthesizer, you take in all this information and respond with the final thing
     `);
   const response = await model.invoke([
     systemPrompt,
-    new HumanMessage(allResults.join('\n'))
-  ])
-  console.log(response)
+    new HumanMessage(allResults.join("\n")),
+  ]);
+
   return new Command({
     update: {
-      result: response.content as string
-    }
+      result: response.text
+    },
   });
 };
 
@@ -203,8 +204,7 @@ export const agent = workflow.compile({
 const researcherState = new StateSchema({
   messages: MessagesValue,
   task: z.string(),
-  // result: z.string(),
-  result: z.custom<AIMessage>(),
+  result: z.custom<AIMessage>(val => val instanceof AIMessage),
 });
 const researcherAgent = new StateGraph(researcherState)
   .addNode("researcherNode", async (state) => {

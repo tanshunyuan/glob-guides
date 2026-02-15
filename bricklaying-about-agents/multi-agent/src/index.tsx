@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, createContext, useContext } from "react";
 import { Box, render, Text } from "ink";
 import { useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
@@ -16,6 +16,35 @@ import {
 import { agent } from "./agent/index.js";
 import { Command } from "@langchain/langgraph";
 
+interface MessagesContextType {
+  messages: BaseMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<BaseMessage[]>>;
+}
+
+const MessagesContext = createContext<MessagesContextType | undefined>(
+  undefined,
+);
+
+const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
+  const [messages, setMessages] = useState<BaseMessage[]>([]);
+
+  return (
+    <MessagesContext.Provider value={{ messages, setMessages }}>
+      {children}
+    </MessagesContext.Provider>
+  );
+};
+
+const useMessagesContext = () => {
+  const context = useContext(MessagesContext);
+  if (context === undefined) {
+    throw new Error(
+      "useMessagesContext must be used within a MessagesProvider",
+    );
+  }
+  return context;
+};
+
 const BlinkingDot = ({ color = "green" }: { color: string }) => {
   const [visible, setVisible] = useState(true);
 
@@ -31,14 +60,14 @@ const BlinkingDot = ({ color = "green" }: { color: string }) => {
 };
 
 const useMessages = () => {
-  const [messages, setMessages] = useState<BaseMessage[]>([]);
+  const { messages, setMessages } = useMessagesContext();
   const [interruptData, setInterruptData] = useState<HITLRequest | undefined>(
     undefined,
   );
-  // const [input, setInput] = useState("");
-  const [input, setInput] = useState(
-    "can you help me find the recent feats of kilian jornet",
-  );
+  const [input, setInput] = useState("");
+  // const [input, setInput] = useState(
+  //   "can you help me find the recent feats of kilian jornet",
+  // );
   // const [input, setInput] = useState(
   //   "can you send out an email to jane for meme@test.com and the content is you are a meme",
   // );
@@ -49,7 +78,7 @@ const useMessages = () => {
       }),
       {
         streamMode: ["messages", "updates"],
-        // subgraphs: true,
+        subgraphs: true,
         configurable: {
           thread_id: "1234",
         },
@@ -58,9 +87,12 @@ const useMessages = () => {
 
     setMessages((prev) => [...prev, new AIMessage("")]);
     for await (const chunks of response) {
-      const [mode, chunk] = chunks;
+      const [_, streamMode, chunk] = chunks;
 
-      if (mode === "messages") {
+      // console.log(`streamMode ==> ${streamMode}`);
+      // console.log(`chunk ==> ${JSON.stringify(chunk)}`);
+
+      if (streamMode === "messages") {
         const [token, metadata] = chunk;
         // console.log(`node: ${metadata.langgraph_node}`);
         // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
@@ -71,25 +103,23 @@ const useMessages = () => {
         //   setMessages((prev) => [...prev, new ToolMessage({})]);
         // }
 
-        if (metadata.langgraph_node === "model_request") {
-          for (const tokenContent of tokenContentBlocks) {
-            if (tokenContent.type === "text") {
-              const newContent = tokenContent.text;
-              setMessages((prev) => {
-                // returns a shallow copy without the last element
-                const trimmedMsg = prev.slice(0, -1);
-                // grabs the last item in the array, access it's content and append the new content
-                const updatedContent = new AIMessage(
-                  prev.slice(-1)[0]?.content + newContent,
-                );
-                return [...trimmedMsg, updatedContent];
-              });
-            }
+        for (const tokenContent of tokenContentBlocks) {
+          if (tokenContent.type === "text") {
+            const newContent = tokenContent.text;
+            setMessages((prev) => {
+              // returns a shallow copy without the last element
+              const trimmedMsg = prev.slice(0, -1);
+              // grabs the last item in the array, access it's content and append the new content
+              const updatedContent = new AIMessage(
+                prev.slice(-1)[0]?.content + newContent,
+              );
+              return [...trimmedMsg, updatedContent];
+            });
           }
         }
       }
 
-      if (mode === "updates") {
+      if (streamMode === "updates") {
         if ("__interrupt__" in chunk) {
           const interruptContent = chunk[
             "__interrupt__"
@@ -319,6 +349,11 @@ const UserInteraction = () => {
   );
 };
 
-render(<UserInteraction />, {
-  // patchConsole: false,
-});
+render(
+  <MessagesProvider>
+    <UserInteraction />
+  </MessagesProvider>,
+  {
+    // patchConsole: false,
+  },
+);
