@@ -1,4 +1,10 @@
-import React, { useState, useEffect, createContext, useContext } from "react";
+import React, {
+  useState,
+  useEffect,
+  createContext,
+  useContext,
+  useCallback,
+} from "react";
 import { Box, render, Text } from "ink";
 import { useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
@@ -16,18 +22,15 @@ import {
 import { agent } from "./agent/index.js";
 import { Command } from "@langchain/langgraph";
 
-interface MessagesContextType {
-  messages: BaseMessage[];
-  setMessages: React.Dispatch<React.SetStateAction<BaseMessage[]>>;
-  interruptData: HITLRequest | undefined;
-  setInterruptData: React.Dispatch<
-    React.SetStateAction<HITLRequest | undefined>
-  >;
-}
-
-const MessagesContext = createContext<MessagesContextType | undefined>(
-  undefined,
-);
+const MessagesContext = createContext<
+  | {
+      messages: BaseMessage[];
+      interruptData: HITLRequest | undefined;
+      sendMessage: (input: string) => Promise<void>;
+      resumeInterrupt: (data: HITLResponse) => Promise<void>;
+    }
+  | undefined
+>(undefined);
 
 const useMessagesContext = () => {
   const context = useContext(MessagesContext);
@@ -43,37 +46,79 @@ const useMessagesContext = () => {
  * @description component to handle the instantiation of MessagesContext.Provider
  */
 const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
-  const [messages, setMessages] = useState<MessagesContextType["messages"]>([]);
-  const [interruptData, setInterruptData] =
-    useState<MessagesContextType["interruptData"]>(undefined);
+  const [messages, setMessages] = useState<BaseMessage[]>([]);
+  const [interruptData, setInterruptData] = useState<HITLRequest | undefined>();
 
-  return (
-    <MessagesContext.Provider
-      value={{ messages, setMessages, interruptData, setInterruptData }}
-    >
-      {children}
-    </MessagesContext.Provider>
-  );
-};
+  const sendMessage = useCallback(
+    async (input: string) => {
+      const userMessage = new HumanMessage(input);
+      setMessages((prev) => [...prev, userMessage]);
 
-const BlinkingDot = ({ color = "green" }: { color: string }) => {
-  const [visible, setVisible] = useState(true);
+      const response = await agent.stream(
+        {
+          messages: [...messages, userMessage],
+        },
+        {
+          streamMode: ["messages", "updates"],
+          configurable: {
+            thread_id: "1234",
+          },
+        },
+      );
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setVisible((prev) => !prev);
-    }, 500);
+      // Add empty assistant message that we'll update
+      setMessages((prev) => [...prev, new AIMessage("")]);
 
-    return () => clearInterval(interval);
-  }, []);
+      for await (const chunks of response) {
+        // console.log("le chunks", chunks);
+        const [mode, chunk] = chunks;
 
-  return <Text color={color}>{visible ? "●" : " "}</Text>;
-};
+        if (mode === "messages") {
+          const [token, metadata] = chunk;
+          // console.log(`node: ${metadata.langgraph_node}`);
+          // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
+          const tokenContentBlocks = token.contentBlocks;
+          if (!tokenContentBlocks.length) continue;
 
-const useMessages = () => {
-  const { messages, setMessages, interruptData, setInterruptData } =
-    useMessagesContext();
-  const resumeInterrupt = async (data: HITLResponse) => {
+          for (const tokenContent of tokenContentBlocks) {
+            if (tokenContent.type === "text") {
+              const newContent = tokenContent.text;
+              setMessages((prev) => [
+                // this removes the empty text set
+                ...prev.slice(0, -1),
+                // grabs the last item in the array, access it's content and append the new content
+                new AIMessage(prev.slice(-1)[0]?.content + newContent),
+              ]);
+            }
+          }
+        }
+
+        if (mode === "updates") {
+          if ("__interrupt__" in chunk) {
+            console.log("interrupt chunk ", chunk);
+            const interruptContent = chunk[
+              "__interrupt__"
+            ] as unknown as Interrupt<HITLRequest>[];
+
+            const hasInterruptInfo =
+              Array.isArray(interruptContent) &&
+              interruptContent[0] &&
+              Object.hasOwn(interruptContent[0]?.value, "actionRequests") &&
+              interruptContent[0].value.actionRequests.length > 0;
+
+            if (hasInterruptInfo) {
+              const interruptInfo = interruptContent[0]?.value;
+              setInterruptData(interruptInfo);
+            }
+          }
+        }
+      }
+    },
+    [messages],
+  ); // Add dependencies
+
+  const resumeInterrupt = useCallback(async (data: HITLResponse) => {
+    setInterruptData(undefined);
     const response = await agent.stream(
       new Command({
         resume: data,
@@ -140,79 +185,29 @@ const useMessages = () => {
         }
       }
     }
-  };
+  }, []);
 
-  const sendMessage = async (input: string) => {
-    const userMessage = new HumanMessage(input);
-    setMessages((prev) => [...prev, userMessage]);
+  return (
+    <MessagesContext.Provider
+      value={{ messages, interruptData, sendMessage, resumeInterrupt }}
+    >
+      {children}
+    </MessagesContext.Provider>
+  );
+};
 
-    const response = await agent.stream(
-      {
-        messages: [...messages, userMessage],
-      },
-      {
-        streamMode: ["messages", "updates"],
-        configurable: {
-          thread_id: "1234",
-        },
-      },
-    );
+const BlinkingDot = ({ color = "green" }: { color: string }) => {
+  const [visible, setVisible] = useState(true);
 
-    // Add empty assistant message that we'll update
-    setMessages((prev) => [...prev, new AIMessage("")]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVisible((prev) => !prev);
+    }, 500);
 
-    for await (const chunks of response) {
-      // console.log("le chunks", chunks);
-      const [mode, chunk] = chunks;
+    return () => clearInterval(interval);
+  }, []);
 
-      if (mode === "messages") {
-        const [token, metadata] = chunk;
-        // console.log(`node: ${metadata.langgraph_node}`);
-        // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
-        const tokenContentBlocks = token.contentBlocks;
-        if (!tokenContentBlocks.length) continue;
-
-        for (const tokenContent of tokenContentBlocks) {
-          if (tokenContent.type === "text") {
-            const newContent = tokenContent.text;
-            setMessages((prev) => [
-              // this removes the empty text set
-              ...prev.slice(0, -1),
-              // grabs the last item in the array, access it's content and append the new content
-              new AIMessage(prev.slice(-1)[0]?.content + newContent),
-            ]);
-          }
-        }
-      }
-
-      if (mode === "updates") {
-        if ("__interrupt__" in chunk) {
-          console.log("interrupt chunk ", chunk);
-          const interruptContent = chunk[
-            "__interrupt__"
-          ] as unknown as Interrupt<HITLRequest>[];
-
-          const hasInterruptInfo =
-            Array.isArray(interruptContent) &&
-            interruptContent[0] &&
-            Object.hasOwn(interruptContent[0]?.value, "actionRequests") &&
-            interruptContent[0].value.actionRequests.length > 0;
-
-          if (hasInterruptInfo) {
-            const interruptInfo = interruptContent[0]?.value;
-            setInterruptData(interruptInfo);
-          }
-        }
-      }
-    }
-  };
-
-  return {
-    messages,
-    sendMessage,
-    interruptData,
-    resumeInterrupt,
-  };
+  return <Text color={color}>{visible ? "●" : " "}</Text>;
 };
 
 const Message = ({ message }: { message: BaseMessage }) => {
@@ -247,12 +242,8 @@ const Message = ({ message }: { message: BaseMessage }) => {
   );
 };
 
-const HITLPrompt = ({
-  resumeInterrupt,
-}: {
-  resumeInterrupt: (data: HITLResponse) => Promise<void>;
-}) => {
-  const { interruptData, setInterruptData } = useMessagesContext();
+const HITLPrompt = () => {
+  const { interruptData, resumeInterrupt } = useMessagesContext();
   const [activeKey, setActiveKey] = useState("accept");
 
   useInput((input, key) => {
@@ -265,7 +256,6 @@ const HITLPrompt = ({
           },
         ],
       };
-      setInterruptData(undefined);
       resumeInterrupt(resume);
     }
   });
@@ -292,7 +282,7 @@ const HITLPrompt = ({
 const UserInteraction = () => {
   const { exit } = useApp();
   const { messages, sendMessage, interruptData, resumeInterrupt } =
-    useMessages();
+    useMessagesContext();
 
   const [input, setInput] = useState("");
   // const [input, setInput] = useState(
@@ -318,7 +308,7 @@ const UserInteraction = () => {
         {messages.length > 0 && <Box flexGrow={1} />}
       </Box>
       {interruptData ? (
-        <HITLPrompt resumeInterrupt={resumeInterrupt} />
+        <HITLPrompt />
       ) : (
         <Box width="100%">
           <Text color="blue">$ </Text>
