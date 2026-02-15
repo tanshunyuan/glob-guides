@@ -19,21 +19,15 @@ import { Command } from "@langchain/langgraph";
 interface MessagesContextType {
   messages: BaseMessage[];
   setMessages: React.Dispatch<React.SetStateAction<BaseMessage[]>>;
+  interruptData: HITLRequest | undefined;
+  setInterruptData: React.Dispatch<
+    React.SetStateAction<HITLRequest | undefined>
+  >;
 }
 
 const MessagesContext = createContext<MessagesContextType | undefined>(
   undefined,
 );
-
-const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
-  const [messages, setMessages] = useState<BaseMessage[]>([]);
-
-  return (
-    <MessagesContext.Provider value={{ messages, setMessages }}>
-      {children}
-    </MessagesContext.Provider>
-  );
-};
 
 const useMessagesContext = () => {
   const context = useContext(MessagesContext);
@@ -43,6 +37,23 @@ const useMessagesContext = () => {
     );
   }
   return context;
+};
+
+/**
+ * @description component to handle the instantiation of MessagesContext.Provider
+ */
+const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
+  const [messages, setMessages] = useState<MessagesContextType["messages"]>([]);
+  const [interruptData, setInterruptData] =
+    useState<MessagesContextType["interruptData"]>(undefined);
+
+  return (
+    <MessagesContext.Provider
+      value={{ messages, setMessages, interruptData, setInterruptData }}
+    >
+      {children}
+    </MessagesContext.Provider>
+  );
 };
 
 const BlinkingDot = ({ color = "green" }: { color: string }) => {
@@ -60,17 +71,8 @@ const BlinkingDot = ({ color = "green" }: { color: string }) => {
 };
 
 const useMessages = () => {
-  const { messages, setMessages } = useMessagesContext();
-  const [interruptData, setInterruptData] = useState<HITLRequest | undefined>(
-    undefined,
-  );
-  const [input, setInput] = useState("");
-  // const [input, setInput] = useState(
-  //   "can you help me find the recent feats of kilian jornet",
-  // );
-  // const [input, setInput] = useState(
-  //   "can you send out an email to jane for meme@test.com and the content is you are a meme",
-  // );
+  const { messages, setMessages, interruptData, setInterruptData } =
+    useMessagesContext();
   const resumeInterrupt = async (data: HITLResponse) => {
     const response = await agent.stream(
       new Command({
@@ -140,11 +142,9 @@ const useMessages = () => {
     }
   };
 
-  const sendMessage = async () => {
+  const sendMessage = async (input: string) => {
     const userMessage = new HumanMessage(input);
     setMessages((prev) => [...prev, userMessage]);
-
-    setInput("");
 
     const response = await agent.stream(
       {
@@ -209,11 +209,8 @@ const useMessages = () => {
 
   return {
     messages,
-    input,
-    setInput,
     sendMessage,
     interruptData,
-    setInterruptData,
     resumeInterrupt,
   };
 };
@@ -251,14 +248,11 @@ const Message = ({ message }: { message: BaseMessage }) => {
 };
 
 const HITLPrompt = ({
-  interruptData,
-  setInterruptData,
   resumeInterrupt,
 }: {
-  interruptData: HITLRequest;
-  setInterruptData: (data: undefined) => void;
   resumeInterrupt: (data: HITLResponse) => Promise<void>;
 }) => {
+  const { interruptData, setInterruptData } = useMessagesContext();
   const [activeKey, setActiveKey] = useState("accept");
 
   useInput((input, key) => {
@@ -275,6 +269,8 @@ const HITLPrompt = ({
       resumeInterrupt(resume);
     }
   });
+
+  if (!interruptData) return;
 
   return (
     <Box width="100%" flexDirection="column">
@@ -295,15 +291,13 @@ const HITLPrompt = ({
 
 const UserInteraction = () => {
   const { exit } = useApp();
-  const {
-    messages,
-    input,
-    setInput,
-    sendMessage,
-    interruptData,
-    setInterruptData,
-    resumeInterrupt,
-  } = useMessages();
+  const { messages, sendMessage, interruptData, resumeInterrupt } =
+    useMessages();
+
+  const [input, setInput] = useState("");
+  // const [input, setInput] = useState(
+  //   "can you help me find the recent feats of kilian jornet",
+  // );
 
   const [showShutdown, setShowShutdown] = useState(false);
 
@@ -324,11 +318,7 @@ const UserInteraction = () => {
         {messages.length > 0 && <Box flexGrow={1} />}
       </Box>
       {interruptData ? (
-        <HITLPrompt
-          setInterruptData={setInterruptData}
-          interruptData={interruptData}
-          resumeInterrupt={resumeInterrupt}
-        />
+        <HITLPrompt resumeInterrupt={resumeInterrupt} />
       ) : (
         <Box width="100%">
           <Text color="blue">$ </Text>
@@ -336,7 +326,10 @@ const UserInteraction = () => {
             value={input}
             onChange={setInput}
             placeholder="Type a command..."
-            onSubmit={sendMessage}
+            onSubmit={() => {
+              sendMessage(input);
+              setInput("");
+            }}
           />
         </Box>
       )}
