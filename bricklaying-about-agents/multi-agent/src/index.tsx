@@ -235,15 +235,15 @@ const Message = ({ message }: { message: BaseMessage }) => {
 
 const HITLPrompt = () => {
   const { interruptData, resumeInterrupt } = useMessagesContext();
-  const [decision, setDecision] = useState<string>(
-    interruptData?.actions[0]?.type || "",
+  const [decision, setDecision] = useState<HumanApprovalResponse["type"]>(
+    interruptData?.actions[0]?.type || "accept",
   );
 
   useInput((input, key) => {
     if (key.return) {
       const resume: HumanApprovalResponse = {
-        //@ts-ignore
         type: decision,
+        feedback: undefined,
       };
       resumeInterrupt(resume);
     }
@@ -263,7 +263,7 @@ const HITLPrompt = () => {
       <Text>{interruptData.description}</Text>
       <Tabs
         onChange={(newTabKey) => {
-          setDecision(newTabKey);
+          setDecision(newTabKey as HumanApprovalResponse["type"]);
         }}
       >
         {interruptData.actions.map((decisionType, index) => (
@@ -278,8 +278,7 @@ const HITLPrompt = () => {
 
 const UserInteraction = () => {
   const { exit } = useApp();
-  const { messages, sendMessage, interruptData, resumeInterrupt } =
-    useMessagesContext();
+  const { messages, sendMessage, interruptData } = useMessagesContext();
 
   // const [input, setInput] = useState("");
   const [input, setInput] = useState(

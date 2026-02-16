@@ -11,14 +11,7 @@ import {
   StateGraph,
   StateSchema,
 } from "@langchain/langgraph";
-import {
-  SystemMessage,
-  HumanMessage,
-  HITLRequest,
-  HITLResponse,
-  AIMessage,
-  BaseMessage,
-} from "langchain";
+import { SystemMessage, HumanMessage, AIMessage } from "langchain";
 import z from "zod";
 
 const overallState = new StateSchema({
@@ -128,16 +121,23 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   };
 
   const response: HumanApprovalResponse = interrupt(interruptRequest);
+  console.log("humanApprovalNode.response ==> ", response);
   if (response.type === "accept") {
     return new Command({
       goto: EXECUTOR_NODE,
     });
-  } else {
-    /**@todo handle this properly */
+  } else if (response.type === "cancel") {
     return new Command({
       goto: END,
+      update: {
+        messages: [...state.messages, new HumanMessage('The user rejected the plan')]
+      }
     });
   }
+
+  return new Command({
+    goto: END,
+  });
 };
 
 const EXECUTOR_NODE = "executorNode";
@@ -195,7 +195,6 @@ const workflow = new StateGraph(overallState)
   .addNode(SUMMARISE_NODE, summariseNode)
   .addEdge(START, CONVERSATION_NODE)
   .addEdge(PLANNER_NODE, HUMAN_APPOVAL_NODE)
-  .addEdge(HUMAN_APPOVAL_NODE, EXECUTOR_NODE)
   .addEdge(EXECUTOR_NODE, SUMMARISE_NODE)
   .addEdge(SUMMARISE_NODE, END);
 
