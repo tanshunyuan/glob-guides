@@ -100,33 +100,35 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
   });
 };
 
+export type HumanApprovalResponse =
+  | {
+      type: "accept";
+    }
+  | {
+      type: "cancel";
+      feedback: string | undefined;
+    };
+
+export type HumanApprovalRequest = {
+  name: string;
+  description: string;
+  content: string;
+  actions: HumanApprovalResponse[];
+};
 const HUMAN_APPOVAL_NODE = "humanApprovalNode";
 const humanApprovalNode: GraphNode<OverallState> = async (
   state,
 ): Promise<Command<OverallState>> => {
   console.log("at humanApprovalNode");
-  const interruptRequest: HITLRequest = {
-    actionRequests: [
-      {
-        name: "planReview",
-        description: "Review the plan suggested by the planner",
-        args: {},
-      },
-    ],
-    reviewConfigs: [
-      {
-        actionName: "planReview",
-        allowedDecisions: [
-          "approve",
-          "reject",
-          // 'edit'
-        ],
-      },
-    ],
+  const interruptRequest: HumanApprovalRequest = {
+    name: "Plan Review",
+    description: "Review the plan suggested by the planner",
+    content: state.plan.join(`\n`),
+    actions: [{ type: "accept" }, { type: "cancel", feedback: undefined }],
   };
 
-  const response: HITLResponse = interrupt(interruptRequest);
-  if (response.decisions[0]?.type === "approve") {
+  const response: HumanApprovalResponse = interrupt(interruptRequest);
+  if (response.type === "accept") {
     return new Command({
       goto: EXECUTOR_NODE,
     });
@@ -176,7 +178,7 @@ const summariseNode: GraphNode<OverallState> = async (state, config) => {
 
   return new Command({
     update: {
-      result: response.text
+      result: response.text,
     },
   });
 };
@@ -204,7 +206,7 @@ export const agent = workflow.compile({
 const researcherState = new StateSchema({
   messages: MessagesValue,
   task: z.string(),
-  result: z.custom<AIMessage>(val => val instanceof AIMessage),
+  result: z.custom<AIMessage>((val) => val instanceof AIMessage),
 });
 const researcherAgent = new StateGraph(researcherState)
   .addNode("researcherNode", async (state) => {
