@@ -235,15 +235,20 @@ const Message = ({ message }: { message: BaseMessage }) => {
 
 const HITLPrompt = () => {
   const { interruptData, resumeInterrupt } = useMessagesContext();
+  // set initial descision from the server
   const [decision, setDecision] = useState<HumanApprovalResponse["type"]>(
     interruptData?.actions[0]?.type || "accept",
+  );
+  /**@description user can choose to provide feedback or not */
+  const [planFeedback, setPlanFeedback] = useState<string | undefined>(
+    undefined,
   );
 
   useInput((input, key) => {
     if (key.return) {
       const resume: HumanApprovalResponse = {
         type: decision,
-        feedback: undefined,
+        feedback: planFeedback ? planFeedback.trim() : undefined,
       };
       resumeInterrupt(resume);
     }
@@ -264,6 +269,7 @@ const HITLPrompt = () => {
       <Tabs
         onChange={(newTabKey) => {
           setDecision(newTabKey as HumanApprovalResponse["type"]);
+          setPlanFeedback("");
         }}
       >
         {interruptData.actions.map((decisionType, index) => (
@@ -272,6 +278,13 @@ const HITLPrompt = () => {
           </Tab>
         ))}
       </Tabs>
+      {decision === "cancel" && (
+        <TextInput
+          value={planFeedback ?? ""}
+          onChange={setPlanFeedback}
+          placeholder="Why are you rejecting this plan?"
+        />
+      )}
     </Box>
   );
 };

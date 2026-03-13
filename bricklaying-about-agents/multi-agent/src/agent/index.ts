@@ -128,10 +128,17 @@ const humanApprovalNode: GraphNode<OverallState> = async (
     });
   } else if (response.type === "cancel") {
     return new Command({
-      goto: END,
+      goto: PLANNER_NODE,
       update: {
-        messages: [...state.messages, new HumanMessage('The user rejected the plan')]
-      }
+        messages: [
+          ...state.messages,
+          new HumanMessage(
+            response.feedback
+              ? `The user rejected the plan. Feedback: ${response.feedback}`
+              : "The user rejected the plan.",
+          ),
+        ],
+      },
     });
   }
 
@@ -189,7 +196,7 @@ const workflow = new StateGraph(overallState)
   })
   .addNode(PLANNER_NODE, plannerNode)
   .addNode(HUMAN_APPOVAL_NODE, humanApprovalNode, {
-    ends: [EXECUTOR_NODE, END],
+    ends: [EXECUTOR_NODE, PLANNER_NODE, END],
   })
   .addNode(EXECUTOR_NODE, executorNode)
   .addNode(SUMMARISE_NODE, summariseNode)
