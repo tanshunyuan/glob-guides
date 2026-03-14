@@ -88,6 +88,7 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
       limit yourself to one plans
       `);
   } else {
+    /**@todo shift feedback handling to user message, doesn't feel right to be here */
     systemPrompt = new SystemMessage(`
       your goal is to come up with a plan based on the following objective:
 
@@ -234,6 +235,7 @@ const researcherState = new StateSchema({
   task: z.string(),
   result: z.custom<AIMessage>((val) => val instanceof AIMessage),
 });
+/**@description researcher sub agent */
 const researcherAgent = new StateGraph(researcherState)
   .addNode("researcherNode", async (state) => {
     const model = new ChatOpenAI({
