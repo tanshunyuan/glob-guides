@@ -22,6 +22,7 @@ const overallState = new StateSchema({
     z.string(),
     z.custom<AIMessage>((val) => val instanceof AIMessage),
   ),
+  feedback: z.string().optional(),
   result: z.string(),
 });
 type OverallState = typeof overallState;
@@ -76,18 +77,33 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
   }).withStructuredOutput(schema, {
     includeRaw: true,
   });
-  const systemPrompt = new SystemMessage(`
-    your goal is to come up with a plan based on the following objective:
 
-    objective: ${state.objective}
+  let systemPrompt;
+  if (!state.feedback) {
+    systemPrompt = new SystemMessage(`
+      your goal is to come up with a plan based on the following objective:
 
-    limit yourself to one plans
-    `);
+      objective: ${state.objective}
+
+      limit yourself to one plans
+      `);
+  } else {
+    systemPrompt = new SystemMessage(`
+      your goal is to come up with a plan based on the following objective:
+
+      objective: ${state.objective}
+
+      the user had given this feedback: ${state.feedback}
+
+      this was the original plan: ${state.plan.join("\n")}
+      `);
+  }
   const response = await model.invoke([systemPrompt, ...state.messages]);
 
   return new Command({
     update: {
       plan: response.parsed.plan,
+      feedback: undefined,
     },
     goto: HUMAN_APPOVAL_NODE,
   });
@@ -113,6 +129,7 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   state,
 ): Promise<Command<OverallState>> => {
   console.log("at humanApprovalNode");
+  console.log("humanApprovalNode.state ==> ", JSON.stringify(state))
   const interruptRequest: HumanApprovalRequest = {
     name: "Plan Review",
     description: "Review the plan suggested by the planner",
@@ -130,14 +147,17 @@ const humanApprovalNode: GraphNode<OverallState> = async (
     return new Command({
       goto: PLANNER_NODE,
       update: {
-        messages: [
-          ...state.messages,
-          new HumanMessage(
-            response.feedback
-              ? `The user rejected the plan. Feedback: ${response.feedback}`
-              : "The user rejected the plan.",
-          ),
-        ],
+        // messages: [
+        //   ...state.messages,
+        //   new HumanMessage(
+        //     response.feedback
+        //       ? `The user rejected the plan. Feedback: ${response.feedback}`
+        //       : "The user rejected the plan.",
+        //   ),
+        // ],
+        feedback: response.feedback
+          ? `The user rejected the plan. Feedback: ${response.feedback}`
+          : "The user rejected the plan.",
       },
     });
   }
