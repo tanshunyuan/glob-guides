@@ -29,6 +29,7 @@ type OverallState = typeof overallState;
 
 const CONVERSATION_NODE = "conversationNode";
 const conversationNode: GraphNode<OverallState> = async (state, config) => {
+  const writer = config.writer;
   const schema = z.object({
     reason: z.string(),
     objective: z.string().nullable(),
@@ -36,10 +37,7 @@ const conversationNode: GraphNode<OverallState> = async (state, config) => {
   const model = new ChatOpenAI({
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
-    streaming: true,
-  }).withStructuredOutput(schema, {
-    includeRaw: true,
-  });
+  }).withStructuredOutput(schema);
   const systemPrompt = new SystemMessage(`
     your goal is to ask user question to make sure they know what they're asking for,
     before heading to the next step. this is to ensure the planner comes up with the most
@@ -47,18 +45,22 @@ const conversationNode: GraphNode<OverallState> = async (state, config) => {
     `);
   const response = await model.invoke([systemPrompt, ...state.messages]);
 
-  if (!response.parsed.objective) {
+  if (!response.objective) {
     return new Command({
       update: {
-        messages: response.parsed.reason,
+        messages: response.reason,
       },
       goto: END,
     });
   } else {
+    writer?.({
+      type: "conversation_node",
+      response: `Yes! I can help you with ${state.messages[state.messages.length - 1]?.text}\n`,
+    });
     return new Command({
       update: {
-        messages: response.parsed.reason,
-        objective: response.parsed.objective,
+        messages: response.reason,
+        objective: response.objective,
       },
       goto: PLANNER_NODE,
     });
@@ -66,7 +68,8 @@ const conversationNode: GraphNode<OverallState> = async (state, config) => {
 };
 
 const PLANNER_NODE = "plannerNode";
-const plannerNode: GraphNode<OverallState> = async (state) => {
+const plannerNode: GraphNode<OverallState> = async (state, config) => {
+  const writer = config.writer;
   const schema = z.object({
     plan: z.array(z.string()),
   });
@@ -74,9 +77,7 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
     streaming: true,
-  }).withStructuredOutput(schema, {
-    includeRaw: true,
-  });
+  }).withStructuredOutput(schema);
 
   let systemPrompt;
   if (!state.feedback) {
@@ -101,9 +102,14 @@ const plannerNode: GraphNode<OverallState> = async (state) => {
   }
   const response = await model.invoke([systemPrompt, ...state.messages]);
 
+  writer?.({
+    type: "plan_generated",
+    response: `Here are the steps taken by the agent:\n${response.plan.join("\n")}`,
+  });
+
   return new Command({
     update: {
-      plan: response.parsed.plan,
+      plan: response.plan,
       feedback: undefined,
     },
     goto: HUMAN_APPOVAL_NODE,
@@ -130,7 +136,7 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   state,
 ): Promise<Command<OverallState>> => {
   console.log("at humanApprovalNode");
-  console.log("humanApprovalNode.state ==> ", JSON.stringify(state))
+  console.log("humanApprovalNode.state ==> ", JSON.stringify(state));
   const interruptRequest: HumanApprovalRequest = {
     name: "Plan Review",
     description: "Review the plan suggested by the planner",

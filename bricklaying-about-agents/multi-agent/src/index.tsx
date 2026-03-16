@@ -56,7 +56,7 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
           messages: [...messages, userMessage],
         },
         {
-          streamMode: ["messages", "updates"],
+          streamMode: ["messages", "updates", "custom"],
           configurable: {
             thread_id: "1234",
           },
@@ -70,25 +70,37 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
         // console.log("le chunks", chunks);
         const [mode, chunk] = chunks;
 
-        if (mode === "messages") {
-          const [token, metadata] = chunk;
-          // console.log(`node: ${metadata.langgraph_node}`);
-          // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
-          const tokenContentBlocks = token.contentBlocks;
-          if (!tokenContentBlocks.length) continue;
-
-          for (const tokenContent of tokenContentBlocks) {
-            if (tokenContent.type === "text") {
-              const newContent = tokenContent.text;
-              setMessages((prev) => [
-                // this removes the empty text set
-                ...prev.slice(0, -1),
-                // grabs the last item in the array, access it's content and append the new content
-                new AIMessage(prev.slice(-1)[0]?.content + newContent),
-              ]);
-            }
-          }
+        if (mode === "custom") {
+          const { type, response } = chunk;
+          setMessages((prev) => [
+            // this removes the empty text set
+            ...prev.slice(0, -1),
+            // grabs the last item in the array, access it's content and append the new content
+            new AIMessage(prev.slice(-1)[0]?.content + response),
+          ]);
         }
+
+        // if (mode === "messages") {
+        //   const [token, metadata] = chunk;
+        //   // console.log(`node: ${metadata.langgraph_node}`);
+        //   // console.log(
+        //   //   `content: ${JSON.stringify(token.contentBlocks, null, 2)}`,
+        //   // );
+        //   const tokenContentBlocks = token.contentBlocks;
+        //   if (!tokenContentBlocks.length) continue;
+
+        //   for (const tokenContent of tokenContentBlocks) {
+        //     if (tokenContent.type === "text") {
+        //       const newContent = tokenContent.text;
+        //       setMessages((prev) => [
+        //         // this removes the empty text set
+        //         ...prev.slice(0, -1),
+        //         // grabs the last item in the array, access it's content and append the new content
+        //         new AIMessage(prev.slice(-1)[0]?.content + newContent),
+        //       ]);
+        //     }
+        //   }
+        // }
 
         if (mode === "updates") {
           if ("__interrupt__" in chunk) {
@@ -109,7 +121,7 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
       }
     },
     [messages],
-  ); // Add dependencies
+  );
 
   const resumeInterrupt = useCallback(async (data: HumanApprovalResponse) => {
     setInterruptData(undefined);
