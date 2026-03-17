@@ -1,212 +1,11 @@
-import React, {
-  useState,
-  useEffect,
-  createContext,
-  useContext,
-  useCallback,
-  ComponentProps,
-} from "react";
-import { Box, render, Text } from "ink";
-import { useApp, useInput } from "ink";
+import { useState, ComponentProps } from "react";
+import { Box, render, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { Tab, Tabs } from "ink-tab";
-import { BaseMessage, HumanMessage, AIMessage, Interrupt } from "langchain";
-import {
-  agent,
-  HumanApprovalRequest,
-  HumanApprovalResponse,
-} from "./agent/index.js";
-import { Command } from "@langchain/langgraph";
+import { BaseMessage, HumanMessage, AIMessage } from "langchain";
+import { HumanApprovalResponse } from "./agent/index.js";
 import Spinner from "ink-spinner";
-import { StreamEvent } from "@langchain/core/tracers/log_stream";
-import { IterableReadableStream } from "@langchain/core/utils/stream";
-
-const MessagesContext = createContext<
-  | {
-      messages: BaseMessage[];
-      interruptData: HumanApprovalRequest | undefined;
-      planOrder: string[];
-      taskStatuses: Record<string, "pending" | "running" | "done">;
-      sendMessage: (input: string) => Promise<void>;
-      resumeInterrupt: (data: HumanApprovalResponse) => Promise<void>;
-    }
-  | undefined
->(undefined);
-
-const useMessagesContext = () => {
-  const context = useContext(MessagesContext);
-  if (context === undefined) {
-    throw new Error(
-      "useMessagesContext must be used within a MessagesProvider",
-    );
-  }
-  return context;
-};
-
-/**
- * @description component to handle the instantiation of MessagesContext.Provider
- */
-const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
-  const [messages, setMessages] = useState<BaseMessage[]>([]);
-  const [interruptData, setInterruptData] = useState<
-    HumanApprovalRequest | undefined
-  >(undefined);
-  const [planOrder, setPlanOrder] = useState<string[]>([]);
-  const [taskStatuses, setTaskStatuses] = useState<
-    Record<string, "pending" | "running" | "done">
-  >({});
-
-  const handleStreamEvents = async (
-    rawStreamEvent: IterableReadableStream<StreamEvent>,
-  ) => {
-    for await (const rawEvent of rawStreamEvent) {
-      // console.log("le rawEvent", rawEvent);
-      const eventName = rawEvent.event;
-      const eventData = rawEvent.data;
-      const nodeName = rawEvent.metadata.langgraph_node;
-
-      if (eventName === "on_parser_end") {
-        let newContent = undefined;
-        const parsedOutput = eventData.output;
-        switch (nodeName) {
-          case "conversationNode":
-            const conversationOutput = parsedOutput as {
-              followup: string | null;
-              objective: string | null;
-            };
-            newContent =
-              conversationOutput.followup ??
-              `Got it, coming up with a plan for: ${conversationOutput.objective}`;
-            break;
-          case "plannerNode":
-            const plannerOutput = parsedOutput as { plan: string[] };
-            // newContent = plannerOutput.plan
-            //   .map((item, i) => `${i + 1}. ${item}`)
-            //   .join("\n");
-            break;
-        }
-        if (newContent === undefined) continue;
-        setMessages((prev) => [
-          // this removes the empty text set
-          ...prev.slice(0, -1),
-          // grabs the last item in the array, access it's content and append the new content
-          new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
-        ]);
-      }
-
-      if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
-        const interruptContent = eventData.chunk?.__interrupt__;
-        const hasInterruptInfo =
-          Array.isArray(interruptContent) && interruptContent[0];
-
-        if (hasInterruptInfo) {
-          const interruptInfo = interruptContent[0]?.value;
-          setInterruptData(interruptInfo);
-          setPlanOrder(interruptInfo.content);
-        }
-      }
-
-      if (
-        eventName === "on_chat_model_stream" &&
-        nodeName === "summariseNode"
-      ) {
-        const chunk = eventData.chunk?.content;
-        const token = typeof chunk === "string" ? chunk : "";
-        if (!token) continue;
-
-        setMessages((prev) => {
-          const last = prev.at(-1);
-          if (last && AIMessage.isInstance(last)) {
-            return [
-              ...prev.slice(0, -1),
-              new AIMessage(String(last.content) + token),
-            ];
-          }
-          return [...prev, new AIMessage(token)];
-        });
-      }
-
-      if (eventName === "on_custom_event") {
-        const customEventName = rawEvent.name;
-        const customEventData = rawEvent.data;
-        if (customEventName === "task_start") {
-          setTaskStatuses((prev) => ({
-            ...prev,
-            [customEventData.task]: "running",
-          }));
-        }
-        if (customEventName === "task_done") {
-          setTaskStatuses((prev) => ({
-            ...prev,
-            [customEventData.task]: "done",
-          }));
-        }
-      }
-    }
-  };
-
-  const sendMessage = useCallback(
-    async (input: string) => {
-      const userMessage = new HumanMessage(input);
-      setMessages((prev) => [...prev, userMessage]);
-
-      const response = agent.streamEvents(
-        {
-          messages: [...messages, userMessage],
-        },
-        {
-          configurable: {
-            thread_id: "1234",
-          },
-          version: "v2",
-        },
-      );
-
-      // Add empty assistant message that we'll update
-      setMessages((prev) => [...prev, new AIMessage("")]);
-
-      await handleStreamEvents(response);
-    },
-    [messages],
-  );
-  const resumeInterrupt = useCallback(async (data: HumanApprovalResponse) => {
-    setInterruptData(undefined);
-
-    if (data.type === "cancel") {
-      setTaskStatuses({});
-    }
-
-    const response = agent.streamEvents(
-      new Command({
-        resume: data,
-      }),
-      {
-        version: "v2",
-        configurable: {
-          thread_id: "1234",
-        },
-      },
-    );
-
-    // setMessages((prev) => [...prev, new AIMessage("")]);
-    await handleStreamEvents(response);
-  }, []);
-
-  return (
-    <MessagesContext.Provider
-      value={{
-        planOrder,
-        messages,
-        interruptData,
-        sendMessage,
-        resumeInterrupt,
-        taskStatuses,
-      }}
-    >
-      {children}
-    </MessagesContext.Provider>
-  );
-};
+import { useMessagesContext, MessagesProvider } from "./ui/provider.js";
 
 const LABEL_WIDTH = 7; // "agent  " / "user   "
 
@@ -246,17 +45,9 @@ const Message = ({ message }: { message: BaseMessage }) => {
     );
   }
 
-  const content = message.content as string;
-
-  if (AIMessage.isInstance(message) && content === "") {
-    return (
-      <Box>
-        <Spinner />
-      </Box>
-    );
-  }
-
-  return <Row label="agent" labelColor="dim" content={content} />;
+  return (
+    <Row label="agent" labelColor="dim" content={message.content as string} />
+  );
 };
 
 /**@description review the plan provided by the interrupts */
@@ -290,11 +81,10 @@ const PlanBox = () => {
   return (
     <Box
       flexDirection="column"
-      borderStyle="single"
+      borderStyle="round"
       borderColor="gray"
       paddingX={2}
       paddingY={1}
-      marginY={1}
     >
       <Text color="dim" dimColor>
         plan review
@@ -341,7 +131,7 @@ const ExecutionProgress = () => {
   }
 
   return (
-    <Box flexDirection="column" marginLeft={LABEL_WIDTH} marginY={1}>
+    <Box flexDirection="column">
       {planOrder.map((task) => {
         const status = taskStatuses[task] ?? "pending";
         return (
@@ -359,7 +149,7 @@ const ExecutionProgress = () => {
 
 const UserInteraction = () => {
   const { exit } = useApp();
-  const { messages, sendMessage, interruptData, taskStatuses } =
+  const { messages, sendMessage, taskStatuses, uiState, interruptData } =
     useMessagesContext();
 
   // const [input, setInput] = useState("");
@@ -387,14 +177,16 @@ const UserInteraction = () => {
         ))}
       </Box>
 
-      {Object.keys(taskStatuses).length > 0 && (
-        <Box marginLeft={LABEL_WIDTH} marginY={1} flexDirection="column">
-          <Text color="dim">execution</Text>
-          <ExecutionProgress />
+      <ExecutionProgress />
+
+      {interruptData ? <PlanBox /> : null}
+      {uiState === "running" ? (
+        <Box>
+          <Text color="dim">$ </Text>
+          <Spinner />
         </Box>
-      )}
-      <PlanBox />
-      {!interruptData && (
+      ) : null}
+      {uiState === "idle" && interruptData === undefined ? (
         <Box width="100%">
           <Text color="blue">$ </Text>
           <TextInput
@@ -408,7 +200,8 @@ const UserInteraction = () => {
             }}
           />
         </Box>
-      )}
+      ) : null}
+
       {showShutdown && (
         <Box>
           <Text color="yellow">Shutting down...</Text>
