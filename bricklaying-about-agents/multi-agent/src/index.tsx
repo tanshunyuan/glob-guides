@@ -1,4 +1,4 @@
-import { useState, ComponentProps } from "react";
+import { useState, ComponentProps, Fragment } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { Tab, Tabs } from "ink-tab";
@@ -6,49 +6,6 @@ import { BaseMessage, HumanMessage, AIMessage } from "langchain";
 import { HumanApprovalResponse } from "./agent/index.js";
 import Spinner from "ink-spinner";
 import { useMessagesContext, MessagesProvider } from "./ui/provider.js";
-
-const LABEL_WIDTH = 7; // "agent  " / "user   "
-
-const Row = ({
-  label,
-  labelColor,
-  content,
-}: {
-  label: string;
-  labelColor: ComponentProps<typeof Text>["color"];
-  content: string;
-}) => {
-  const lines = content.split("\n");
-
-  return (
-    <Box flexDirection="column">
-      {lines.map((line, i) => (
-        <Box key={i} flexDirection="row">
-          <Text color={labelColor}>
-            {i === 0 ? label.padEnd(LABEL_WIDTH) : " ".repeat(LABEL_WIDTH)}
-          </Text>
-          <Text>{line}</Text>
-        </Box>
-      ))}
-    </Box>
-  );
-};
-
-const Message = ({ message }: { message: BaseMessage }) => {
-  if (HumanMessage.isInstance(message)) {
-    return (
-      <Row
-        label="user"
-        labelColor="green"
-        content={message.content as string}
-      />
-    );
-  }
-
-  return (
-    <Row label="agent" labelColor="dim" content={message.content as string} />
-  );
-};
 
 /**@description review the plan provided by the interrupts */
 const PlanBox = () => {
@@ -147,9 +104,49 @@ const ExecutionProgress = () => {
   );
 };
 
+const MessageHistory = ({ messages }: { messages: BaseMessage[] }) => {
+  if (messages.length === 0) {
+    return (
+      <Box flexGrow={1} flexDirection="column">
+        <Text color="dim">No messages yet.</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexGrow={1} flexDirection="column" gap={1}>
+      {messages.map((message, index) => {
+        const role = HumanMessage.isInstance(message) ? "user" : "agent";
+
+        let label: string;
+        let labelColor: ComponentProps<typeof Text>["color"];
+
+        switch (role) {
+          case "user":
+            label = "user";
+            labelColor = "green";
+            break;
+          case "agent":
+          default:
+            label = "agent";
+            labelColor = "dim";
+            break;
+        }
+
+        return (
+          <Box flexDirection="row" gap={1} key={index}>
+            <Text color={labelColor}>{label}</Text>
+            <Text>{String(message.content)}</Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
+
 const UserInteraction = () => {
   const { exit } = useApp();
-  const { messages, sendMessage, taskStatuses, uiState, interruptData } =
+  const { messages, sendMessage, uiState, interruptData } =
     useMessagesContext();
 
   // const [input, setInput] = useState("");
@@ -170,13 +167,7 @@ const UserInteraction = () => {
   });
   return (
     <Box flexDirection="column" height="100%">
-      {/* Message history */}
-      <Box flexGrow={1} flexDirection="column" gap={1}>
-        {messages.map((message, index) => (
-          <Message key={index} message={message} />
-        ))}
-      </Box>
-
+      <MessageHistory messages={messages} />
       <ExecutionProgress />
 
       {interruptData ? <PlanBox /> : null}
