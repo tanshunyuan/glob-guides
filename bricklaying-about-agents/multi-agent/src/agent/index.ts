@@ -102,28 +102,32 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
     streaming: true,
   }).withStructuredOutput(schema);
 
-  let systemPrompt;
-  if (!state.feedback) {
-    systemPrompt = new SystemMessage(`
-      your goal is to come up with a plan based on the following objective:
+  const systemPrompt = new SystemMessage(`
+    You are planning the next step for the agent.
 
-      objective: ${state.objective}
+    Return a plan for the user's objective.
+    Limit yourself to one task in the plan.
+  `);
 
-      limit yourself to one task in a plan
-      `);
-  } else {
-    /**@todo shift feedback handling to user message, doesn't feel right to be here */
-    systemPrompt = new SystemMessage(`
-      your goal is to come up with a plan based on the following objective:
+  const plannerRequest = !state.feedback
+    ? new HumanMessage(`Objective: ${state.objective}`)
+    : new HumanMessage(`
+      Revise the plan based on the user's feedback.
 
-      objective: ${state.objective}
+      Objective:
+      ${state.objective}
 
-      the user had given this feedback: ${state.feedback}
+      Previous plan:
+      ${state.plan.join("\n")}
 
-      this was the original plan: ${state.plan.join("\n")}
-      `);
-  }
-  const response = await model.invoke([systemPrompt, ...state.messages]);
+      ${!state.feedback ? "" : `User feedback: ${state.feedback}`}
+  `);
+
+  const response = await model.invoke([
+    systemPrompt,
+    ...state.messages,
+    plannerRequest,
+  ]);
 
   return new Command({
     update: {
@@ -170,14 +174,6 @@ const humanApprovalNode: GraphNode<OverallState> = async (
     return new Command({
       goto: PLANNER_NODE,
       update: {
-        // messages: [
-        //   ...state.messages,
-        //   new HumanMessage(
-        //     response.feedback
-        //       ? `The user rejected the plan. Feedback: ${response.feedback}`
-        //       : "The user rejected the plan.",
-        //   ),
-        // ],
         feedback: response.feedback
           ? `The user rejected the plan. Feedback: ${response.feedback}`
           : "The user rejected the plan.",
