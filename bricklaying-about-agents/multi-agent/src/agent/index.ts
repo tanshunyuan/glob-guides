@@ -29,38 +29,62 @@ type OverallState = typeof overallState;
 
 const CONVERSATION_NODE = "conversationNode";
 const conversationNode: GraphNode<OverallState> = async (state, config) => {
-  const writer = config.writer;
   const schema = z.object({
-    reason: z.string(),
-    objective: z.string().nullable(),
+    is_clear: z
+      .boolean()
+      .describe(
+        "True only if the user's message contains a specific, actionable task. False if vague, incomplete, or ambiguous.",
+      ),
+    objective: z
+      .string()
+      .nullable()
+      .describe(
+        "A concise restatement of the user's goal. Only populated when is_clear is true. Null otherwise.",
+      ),
+    followup: z
+      .string()
+      .nullable()
+      .describe(
+        "A single clarifying question to resolve ambiguity. Only populated when is_clear is false. Null otherwise.",
+      ),
   });
+
   const model = new ChatOpenAI({
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
   }).withStructuredOutput(schema);
-  const systemPrompt = new SystemMessage(`
-    your goal is to ask user question to make sure they know what they're asking for,
-    before heading to the next step. this is to ensure the planner comes up with the most
-    accurate plan relavent for the user.
-    `);
-  const response = await model.invoke([systemPrompt, ...state.messages]);
 
-  if (!response.objective) {
+  const systemPrompt = new SystemMessage(`
+    You are an intent classifier for an AI agent pipeline.
+
+    Given the conversation history, determine if the user has expressed a clear,
+    actionable objective.
+
+    Rules:
+    - is_clear = true ONLY if you can extract a specific, self-contained task
+    - is_clear = false if the request is vague, incomplete, or requires assumptions
+    - If is_clear = true: populate 'objective' with a concise restatement of the
+      user's goal. Set  'followup' to null.
+    - If is_clear = false: populate 'followup' with a single, specific clarifying
+      question. Set 'objective' to null.
+
+    Examples of CLEAR: "Summarize this PDF", "Write a SQL query to find top 10 customers"
+    Examples of VAGUE: "Help me with my project", "Do something with this data"
+  `);
+  const response = await model.invoke([systemPrompt, ...state.messages]);
+  console.log("response ==> ", response);
+
+  if (!response.is_clear && response.followup) {
     return new Command({
       update: {
-        messages: response.reason,
+        messages: [new AIMessage(response.followup)],
       },
       goto: END,
     });
   } else {
-    writer?.({
-      type: "conversation_node",
-      response: `Yes! I can help you with ${state.messages[state.messages.length - 1]?.text}\n`,
-    });
     return new Command({
       update: {
-        messages: response.reason,
-        objective: response.objective,
+        objective: response.objective!,
       },
       goto: PLANNER_NODE,
     });
@@ -78,7 +102,6 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
     apiKey: env.OPENAI_API_KEY,
     streaming: true,
   }).withStructuredOutput(schema);
-
 
   let systemPrompt;
   if (!state.feedback) {

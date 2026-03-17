@@ -4,6 +4,7 @@ import React, {
   createContext,
   useContext,
   useCallback,
+  ComponentProps,
 } from "react";
 import { Box, render, Text } from "ink";
 import { useApp, useInput } from "ink";
@@ -16,6 +17,7 @@ import {
   HumanApprovalResponse,
 } from "./agent/index.js";
 import { Command } from "@langchain/langgraph";
+import Spinner from "ink-spinner";
 
 const MessagesContext = createContext<
   | {
@@ -129,7 +131,7 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
 
     setMessages((prev) => [...prev, new AIMessage("")]);
     for await (const rawEvent of response) {
-      console.log("le resumeInterrupt rawEvent", rawEvent);
+      // console.log("le resumeInterrupt rawEvent", rawEvent);
       const eventName = rawEvent.event;
       const eventData = rawEvent.data;
       const nodeName = rawEvent.metadata.langgraph_node;
@@ -246,49 +248,81 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
   );
 };
 
-const BlinkingDot = ({ color = "green" }: { color: string }) => {
+const Cursor = () => {
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setVisible((prev) => !prev);
-    }, 500);
-
+    const interval = setInterval(() => setVisible((v) => !v), 500);
     return () => clearInterval(interval);
   }, []);
 
-  return <Text color={color}>{visible ? "●" : " "}</Text>;
+  return <Text>{visible ? "▌" : " "}</Text>;
 };
 
-const Message = ({ message }: { message: BaseMessage }) => {
+const LABEL_WIDTH = 7; // "agent  " / "user   "
+
+const Row = ({
+  label,
+  labelColor,
+  content,
+  streaming = false,
+}: {
+  label: string;
+  labelColor: ComponentProps<typeof Text>["color"];
+  content: string;
+  streaming?: boolean;
+}) => {
+  const lines = content.split("\n");
+
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, i) => (
+        <Box key={i} flexDirection="row">
+          <Text color={labelColor}>
+            {i === 0 ? label.padEnd(LABEL_WIDTH) : " ".repeat(LABEL_WIDTH)}
+          </Text>
+          <Text>{line}</Text>
+          {streaming && i === lines.length - 1 && <Cursor />}
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
+const Message = ({
+  message,
+  isLast,
+}: {
+  message: BaseMessage;
+  isLast: boolean;
+}) => {
   if (HumanMessage.isInstance(message)) {
     return (
-      <Box marginLeft={2}>
-        <Text color="yellow">&gt; {message.content as string}</Text>
-      </Box>
+      <Row
+        label="user"
+        labelColor="green"
+        content={message.content as string}
+      />
     );
   }
 
-  if (AIMessage.isInstance(message) && message.content === "") {
-    return (
-      <Box marginLeft={2}>
-        <BlinkingDot color="green" />
-      </Box>
-    );
-  }
+  const content = message.content as string;
 
-  if (typeof message.content !== "string") {
+  if (AIMessage.isInstance(message) && content === "") {
     return (
-      <Box marginLeft={2}>
-        <Text color="green">● {JSON.stringify(message.content, null, 2)}</Text>
+      <Box>
+        <Spinner />
       </Box>
     );
   }
 
   return (
-    <Box marginLeft={2}>
-      <Text color="green">● {message.content}</Text>
-    </Box>
+    <Row
+      label="agent"
+      labelColor="dim"
+      content={content}
+      streaming={isLast && AIMessage.isInstance(message)}
+    />
   );
 };
 
@@ -369,12 +403,18 @@ const UserInteraction = () => {
   });
   return (
     <Box flexDirection="column" height="100%">
+      {/* Message history */}
       <Box flexGrow={1} flexDirection="column" gap={1}>
         {messages.map((message, index) => (
-          <Message key={index} message={message} />
+          <Message
+            key={index}
+            message={message}
+            isLast={index === messages.length - 1}
+          />
         ))}
         {messages.length > 0 && <Box flexGrow={1} />}
       </Box>
+
       <HITLPrompt />
       {!interruptData && (
         <Box width="100%">
@@ -382,8 +422,9 @@ const UserInteraction = () => {
           <TextInput
             value={input}
             onChange={setInput}
-            placeholder="Type a command..."
+            placeholder="What would you like me to research?"
             onSubmit={() => {
+              if (!input.trim()) return;
               sendMessage(input);
               setInput("");
             }}
