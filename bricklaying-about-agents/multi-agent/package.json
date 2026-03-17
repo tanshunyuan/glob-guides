@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch ./src/index.tsx",
+    "dev": "tsx --watch ./src/index.tsx",
     "build": "rm -rf dist && tsc",
     "start": "pnpm run build && node dist/src/index.js"
   },

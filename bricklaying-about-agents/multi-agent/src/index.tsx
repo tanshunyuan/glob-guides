@@ -67,7 +67,7 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
       setMessages((prev) => [...prev, new AIMessage("")]);
 
       for await (const rawEvent of response) {
-        console.log("le rawEvent", rawEvent);
+        // console.log("le rawEvent", rawEvent);
         const eventName = rawEvent.event;
         const eventData = rawEvent.data;
         const nodeName = rawEvent.metadata.langgraph_node;
@@ -115,13 +115,12 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
   );
   const resumeInterrupt = useCallback(async (data: HumanApprovalResponse) => {
     setInterruptData(undefined);
-    const response = await agent.stream(
+    const response = agent.streamEvents(
       new Command({
         resume: data,
       }),
       {
-        streamMode: ["messages", "updates"],
-        subgraphs: true,
+        version: "v2",
         configurable: {
           thread_id: "1234",
         },
@@ -129,54 +128,107 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
     );
 
     setMessages((prev) => [...prev, new AIMessage("")]);
-    for await (const chunks of response) {
-      const [_, streamMode, chunk] = chunks;
+    for await (const rawEvent of response) {
+      console.log("le resumeInterrupt rawEvent", rawEvent);
+      const eventName = rawEvent.event;
+      const eventData = rawEvent.data;
+      const nodeName = rawEvent.metadata.langgraph_node;
 
-      // console.log(`streamMode ==> ${streamMode}`);
-      // console.log(`chunk ==> ${JSON.stringify(chunk)}`);
-
-      if (streamMode === "messages") {
-        const [token, metadata] = chunk;
-        // console.log(`node: ${metadata.langgraph_node}`);
-        // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
-        const tokenContentBlocks = token.contentBlocks;
-        if (!tokenContentBlocks.length) continue;
-
-        // if(metadata.langgraph_node === 'tools'){
-        //   setMessages((prev) => [...prev, new ToolMessage({})]);
-        // }
-
-        for (const tokenContent of tokenContentBlocks) {
-          if (tokenContent.type === "text") {
-            const newContent = tokenContent.text;
-            setMessages((prev) => {
-              // returns a shallow copy without the last element
-              const trimmedMsg = prev.slice(0, -1);
-              // grabs the last item in the array, access it's content and append the new content
-              const updatedContent = new AIMessage(
-                prev.slice(-1)[0]?.content + newContent,
-              );
-              return [...trimmedMsg, updatedContent];
-            });
-          }
+      if (eventName === "on_parser_end") {
+        let newContent = undefined;
+        const parsedOutput = eventData.output;
+        switch (nodeName) {
+          case "conversationNode":
+            const conversationOutput = parsedOutput as {
+              reason: string;
+              objective: string;
+            };
+            newContent = `The user is asking me to: ${conversationOutput.objective}`;
+            break;
+          case "plannerNode":
+            const plannerOutput = parsedOutput as { plan: string[] };
+            newContent = plannerOutput.plan
+              .map((item, index) => `${index + 1}. ${String(item)}`)
+              .join("\n");
+            break;
         }
+        if (newContent === undefined) continue;
+        setMessages((prev) => [
+          // this removes the empty text set
+          ...prev.slice(0, -1),
+          // grabs the last item in the array, access it's content and append the new content
+          new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
+        ]);
       }
 
-      if (streamMode === "updates") {
-        if ("__interrupt__" in chunk) {
-          const interruptContent = chunk[
-            "__interrupt__"
-          ] as unknown as Interrupt<HumanApprovalRequest>[];
+      if (eventName === "on_chat_model_stream") {
+        const content = eventData.chunk.content;
 
-          const hasInterruptInfo =
-            Array.isArray(interruptContent) && interruptContent[0];
+        setMessages((prev) => [
+          // this removes the empty text set
+          ...prev.slice(0, -1),
+          // grabs the last item in the array, access it's content and append the new content
+          new AIMessage(prev.slice(-1)[0]?.content + content),
+        ]);
+      }
 
-          if (hasInterruptInfo) {
-            const interruptInfo = interruptContent[0]?.value;
-            setInterruptData(interruptInfo);
-          }
+      if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
+        const interruptContent = eventData.chunk?.__interrupt__;
+        const hasInterruptInfo =
+          Array.isArray(interruptContent) && interruptContent[0];
+
+        if (hasInterruptInfo) {
+          const interruptInfo = interruptContent[0]?.value;
+          setInterruptData(interruptInfo);
         }
       }
+      //   const [_, streamMode, chunk] = chunks;
+
+      //   // console.log(`streamMode ==> ${streamMode}`);
+      //   // console.log(`chunk ==> ${JSON.stringify(chunk)}`);
+
+      //   if (streamMode === "messages") {
+      //     const [token, metadata] = chunk;
+      //     // console.log(`node: ${metadata.langgraph_node}`);
+      //     // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
+      //     const tokenContentBlocks = token.contentBlocks;
+      //     if (!tokenContentBlocks.length) continue;
+
+      //     // if(metadata.langgraph_node === 'tools'){
+      //     //   setMessages((prev) => [...prev, new ToolMessage({})]);
+      //     // }
+
+      //     for (const tokenContent of tokenContentBlocks) {
+      //       if (tokenContent.type === "text") {
+      //         const newContent = tokenContent.text;
+      //         setMessages((prev) => {
+      //           // returns a shallow copy without the last element
+      //           const trimmedMsg = prev.slice(0, -1);
+      //           // grabs the last item in the array, access it's content and append the new content
+      //           const updatedContent = new AIMessage(
+      //             prev.slice(-1)[0]?.content + newContent,
+      //           );
+      //           return [...trimmedMsg, updatedContent];
+      //         });
+      //       }
+      //     }
+      //   }
+
+      //   if (streamMode === "updates") {
+      //     if ("__interrupt__" in chunk) {
+      //       const interruptContent = chunk[
+      //         "__interrupt__"
+      //       ] as unknown as Interrupt<HumanApprovalRequest>[];
+
+      //       const hasInterruptInfo =
+      //         Array.isArray(interruptContent) && interruptContent[0];
+
+      //       if (hasInterruptInfo) {
+      //         const interruptInfo = interruptContent[0]?.value;
+      //         setInterruptData(interruptInfo);
+      //       }
+      //     }
+      //   }
     }
   }, []);
 
