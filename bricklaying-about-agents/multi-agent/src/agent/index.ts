@@ -12,6 +12,7 @@ import {
   StateSchema,
 } from "@langchain/langgraph";
 import { SystemMessage, HumanMessage, AIMessage } from "langchain";
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import z from "zod";
 
 const overallState = new StateSchema({
@@ -72,7 +73,6 @@ const conversationNode: GraphNode<OverallState> = async (state, config) => {
     Examples of VAGUE: "Help me with my project", "Do something with this data"
   `);
   const response = await model.invoke([systemPrompt, ...state.messages]);
-  console.log("response ==> ", response);
 
   if (!response.is_clear && response.followup) {
     return new Command({
@@ -93,7 +93,6 @@ const conversationNode: GraphNode<OverallState> = async (state, config) => {
 
 const PLANNER_NODE = "plannerNode";
 const plannerNode: GraphNode<OverallState> = async (state, config) => {
-  const writer = config.writer;
   const schema = z.object({
     plan: z.array(z.string()),
   });
@@ -147,7 +146,7 @@ export type HumanApprovalResponse =
 export type HumanApprovalRequest = {
   name: string;
   description: string;
-  content: string;
+  content: string[];
   actions: HumanApprovalResponse[];
 };
 const HUMAN_APPOVAL_NODE = "humanApprovalNode";
@@ -159,12 +158,11 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   const interruptRequest: HumanApprovalRequest = {
     name: "Plan Review",
     description: "Review the plan suggested by the planner",
-    content: state.plan.join(`\n`),
+    content: state.plan,
     actions: [{ type: "accept" }, { type: "cancel", feedback: undefined }],
   };
 
   const response: HumanApprovalResponse = interrupt(interruptRequest);
-  console.log("humanApprovalNode.response ==> ", response);
   if (response.type === "accept") {
     return new Command({
       goto: EXECUTOR_NODE,
@@ -198,11 +196,12 @@ const executorNode: GraphNode<OverallState> = async (state, config) => {
   console.log("at executorNode");
   const result: Record<string, AIMessage> = {};
   for (const task of state.plan) {
-    console.log(`searching on ${task}`);
+    dispatchCustomEvent("task_start", { task });
     const response = await researcherAgent.invoke({
       task,
     });
     result[task] = response.result;
+    dispatchCustomEvent("task_done", { task });
   }
   return new Command({
     update: {

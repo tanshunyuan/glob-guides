@@ -18,11 +18,15 @@ import {
 } from "./agent/index.js";
 import { Command } from "@langchain/langgraph";
 import Spinner from "ink-spinner";
+import { StreamEvent } from "@langchain/core/tracers/log_stream";
+import { IterableReadableStream } from "@langchain/core/utils/stream";
 
 const MessagesContext = createContext<
   | {
       messages: BaseMessage[];
       interruptData: HumanApprovalRequest | undefined;
+      planOrder: string[];
+      taskStatuses: Record<string, "pending" | "running" | "done">;
       sendMessage: (input: string) => Promise<void>;
       resumeInterrupt: (data: HumanApprovalResponse) => Promise<void>;
     }
@@ -47,6 +51,99 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
   const [interruptData, setInterruptData] = useState<
     HumanApprovalRequest | undefined
   >(undefined);
+  const [planOrder, setPlanOrder] = useState<string[]>([]);
+  const [taskStatuses, setTaskStatuses] = useState<
+    Record<string, "pending" | "running" | "done">
+  >({});
+
+  const handleStreamEvents = async (
+    rawStreamEvent: IterableReadableStream<StreamEvent>,
+  ) => {
+    for await (const rawEvent of rawStreamEvent) {
+      // console.log("le rawEvent", rawEvent);
+      const eventName = rawEvent.event;
+      const eventData = rawEvent.data;
+      const nodeName = rawEvent.metadata.langgraph_node;
+
+      if (eventName === "on_parser_end") {
+        let newContent = undefined;
+        const parsedOutput = eventData.output;
+        switch (nodeName) {
+          case "conversationNode":
+            const conversationOutput = parsedOutput as {
+              followup: string | null;
+              objective: string | null;
+            };
+            newContent =
+              conversationOutput.followup ??
+              `Got it, coming up with a plan for: ${conversationOutput.objective}`;
+            break;
+          case "plannerNode":
+            const plannerOutput = parsedOutput as { plan: string[] };
+            // newContent = plannerOutput.plan
+            //   .map((item, i) => `${i + 1}. ${item}`)
+            //   .join("\n");
+            break;
+        }
+        if (newContent === undefined) continue;
+        setMessages((prev) => [
+          // this removes the empty text set
+          ...prev.slice(0, -1),
+          // grabs the last item in the array, access it's content and append the new content
+          new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
+        ]);
+      }
+
+      if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
+        const interruptContent = eventData.chunk?.__interrupt__;
+        const hasInterruptInfo =
+          Array.isArray(interruptContent) && interruptContent[0];
+
+        if (hasInterruptInfo) {
+          const interruptInfo = interruptContent[0]?.value;
+          setInterruptData(interruptInfo);
+          setPlanOrder(interruptInfo.content);
+        }
+      }
+
+      if (
+        eventName === "on_chat_model_stream" &&
+        nodeName === "summariseNode"
+      ) {
+        const chunk = eventData.chunk?.content;
+        const token = typeof chunk === "string" ? chunk : "";
+        if (!token) continue;
+
+        setMessages((prev) => {
+          const last = prev.at(-1);
+          if (last && AIMessage.isInstance(last)) {
+            return [
+              ...prev.slice(0, -1),
+              new AIMessage(String(last.content) + token),
+            ];
+          }
+          return [...prev, new AIMessage(token)];
+        });
+      }
+
+      if (eventName === "on_custom_event") {
+        const customEventName = rawEvent.name;
+        const customEventData = rawEvent.data;
+        if (customEventName === "task_start") {
+          setTaskStatuses((prev) => ({
+            ...prev,
+            [customEventData.task]: "running",
+          }));
+        }
+        if (customEventName === "task_done") {
+          setTaskStatuses((prev) => ({
+            ...prev,
+            [customEventData.task]: "done",
+          }));
+        }
+      }
+    }
+  };
 
   const sendMessage = useCallback(
     async (input: string) => {
@@ -68,55 +165,17 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
       // Add empty assistant message that we'll update
       setMessages((prev) => [...prev, new AIMessage("")]);
 
-      for await (const rawEvent of response) {
-        // console.log("le rawEvent", rawEvent);
-        const eventName = rawEvent.event;
-        const eventData = rawEvent.data;
-        const nodeName = rawEvent.metadata.langgraph_node;
-
-        if (eventName === "on_parser_end") {
-          let newContent = undefined;
-          const parsedOutput = eventData.output;
-          switch (nodeName) {
-            case "conversationNode":
-              const conversationOutput = parsedOutput as {
-                reason: string;
-                objective: string;
-              };
-              newContent = `The user is asking me to: ${conversationOutput.objective}`;
-              break;
-            case "plannerNode":
-              const plannerOutput = parsedOutput as { plan: string[] };
-              newContent = plannerOutput.plan
-                .map((item, index) => `${index + 1}. ${String(item)}`)
-                .join("\n");
-              break;
-          }
-          if (newContent === undefined) continue;
-          setMessages((prev) => [
-            // this removes the empty text set
-            ...prev.slice(0, -1),
-            // grabs the last item in the array, access it's content and append the new content
-            new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
-          ]);
-        }
-
-        if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
-          const interruptContent = eventData.chunk?.__interrupt__;
-          const hasInterruptInfo =
-            Array.isArray(interruptContent) && interruptContent[0];
-
-          if (hasInterruptInfo) {
-            const interruptInfo = interruptContent[0]?.value;
-            setInterruptData(interruptInfo);
-          }
-        }
-      }
+      await handleStreamEvents(response);
     },
     [messages],
   );
   const resumeInterrupt = useCallback(async (data: HumanApprovalResponse) => {
     setInterruptData(undefined);
+
+    if (data.type === "cancel") {
+      setTaskStatuses({});
+    }
+
     const response = agent.streamEvents(
       new Command({
         resume: data,
@@ -129,134 +188,24 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
       },
     );
 
-    setMessages((prev) => [...prev, new AIMessage("")]);
-    for await (const rawEvent of response) {
-      // console.log("le resumeInterrupt rawEvent", rawEvent);
-      const eventName = rawEvent.event;
-      const eventData = rawEvent.data;
-      const nodeName = rawEvent.metadata.langgraph_node;
-
-      if (eventName === "on_parser_end") {
-        let newContent = undefined;
-        const parsedOutput = eventData.output;
-        switch (nodeName) {
-          case "conversationNode":
-            const conversationOutput = parsedOutput as {
-              reason: string;
-              objective: string;
-            };
-            newContent = `The user is asking me to: ${conversationOutput.objective}`;
-            break;
-          case "plannerNode":
-            const plannerOutput = parsedOutput as { plan: string[] };
-            newContent = plannerOutput.plan
-              .map((item, index) => `${index + 1}. ${String(item)}`)
-              .join("\n");
-            break;
-        }
-        if (newContent === undefined) continue;
-        setMessages((prev) => [
-          // this removes the empty text set
-          ...prev.slice(0, -1),
-          // grabs the last item in the array, access it's content and append the new content
-          new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
-        ]);
-      }
-
-      if (eventName === "on_chat_model_stream") {
-        const content = eventData.chunk.content;
-
-        setMessages((prev) => [
-          // this removes the empty text set
-          ...prev.slice(0, -1),
-          // grabs the last item in the array, access it's content and append the new content
-          new AIMessage(prev.slice(-1)[0]?.content + content),
-        ]);
-      }
-
-      if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
-        const interruptContent = eventData.chunk?.__interrupt__;
-        const hasInterruptInfo =
-          Array.isArray(interruptContent) && interruptContent[0];
-
-        if (hasInterruptInfo) {
-          const interruptInfo = interruptContent[0]?.value;
-          setInterruptData(interruptInfo);
-        }
-      }
-      //   const [_, streamMode, chunk] = chunks;
-
-      //   // console.log(`streamMode ==> ${streamMode}`);
-      //   // console.log(`chunk ==> ${JSON.stringify(chunk)}`);
-
-      //   if (streamMode === "messages") {
-      //     const [token, metadata] = chunk;
-      //     // console.log(`node: ${metadata.langgraph_node}`);
-      //     // console.log(`content: ${JSON.stringify(token.contentBlocks, null, 2)}`);
-      //     const tokenContentBlocks = token.contentBlocks;
-      //     if (!tokenContentBlocks.length) continue;
-
-      //     // if(metadata.langgraph_node === 'tools'){
-      //     //   setMessages((prev) => [...prev, new ToolMessage({})]);
-      //     // }
-
-      //     for (const tokenContent of tokenContentBlocks) {
-      //       if (tokenContent.type === "text") {
-      //         const newContent = tokenContent.text;
-      //         setMessages((prev) => {
-      //           // returns a shallow copy without the last element
-      //           const trimmedMsg = prev.slice(0, -1);
-      //           // grabs the last item in the array, access it's content and append the new content
-      //           const updatedContent = new AIMessage(
-      //             prev.slice(-1)[0]?.content + newContent,
-      //           );
-      //           return [...trimmedMsg, updatedContent];
-      //         });
-      //       }
-      //     }
-      //   }
-
-      //   if (streamMode === "updates") {
-      //     if ("__interrupt__" in chunk) {
-      //       const interruptContent = chunk[
-      //         "__interrupt__"
-      //       ] as unknown as Interrupt<HumanApprovalRequest>[];
-
-      //       const hasInterruptInfo =
-      //         Array.isArray(interruptContent) && interruptContent[0];
-
-      //       if (hasInterruptInfo) {
-      //         const interruptInfo = interruptContent[0]?.value;
-      //         setInterruptData(interruptInfo);
-      //       }
-      //     }
-      //   }
-    }
+    // setMessages((prev) => [...prev, new AIMessage("")]);
+    await handleStreamEvents(response);
   }, []);
 
   return (
     <MessagesContext.Provider
       value={{
+        planOrder,
         messages,
         interruptData,
         sendMessage,
         resumeInterrupt,
+        taskStatuses,
       }}
     >
       {children}
     </MessagesContext.Provider>
   );
-};
-
-const Cursor = () => {
-  const [visible, setVisible] = useState(true);
-
-  useEffect(() => {
-    const interval = setInterval(() => setVisible((v) => !v), 500);
-    return () => clearInterval(interval);
-  }, []);
-
-  return <Text>{visible ? "▌" : " "}</Text>;
 };
 
 const LABEL_WIDTH = 7; // "agent  " / "user   "
@@ -265,12 +214,10 @@ const Row = ({
   label,
   labelColor,
   content,
-  streaming = false,
 }: {
   label: string;
   labelColor: ComponentProps<typeof Text>["color"];
   content: string;
-  streaming?: boolean;
 }) => {
   const lines = content.split("\n");
 
@@ -282,20 +229,13 @@ const Row = ({
             {i === 0 ? label.padEnd(LABEL_WIDTH) : " ".repeat(LABEL_WIDTH)}
           </Text>
           <Text>{line}</Text>
-          {streaming && i === lines.length - 1 && <Cursor />}
         </Box>
       ))}
     </Box>
   );
 };
 
-const Message = ({
-  message,
-  isLast,
-}: {
-  message: BaseMessage;
-  isLast: boolean;
-}) => {
+const Message = ({ message }: { message: BaseMessage }) => {
   if (HumanMessage.isInstance(message)) {
     return (
       <Row
@@ -316,17 +256,11 @@ const Message = ({
     );
   }
 
-  return (
-    <Row
-      label="agent"
-      labelColor="dim"
-      content={content}
-      streaming={isLast && AIMessage.isInstance(message)}
-    />
-  );
+  return <Row label="agent" labelColor="dim" content={content} />;
 };
 
-const HITLPrompt = () => {
+/**@description review the plan provided by the interrupts */
+const PlanBox = () => {
   const { interruptData, resumeInterrupt } = useMessagesContext();
   // set initial descision from the server
   const [decision, setDecision] = useState<HumanApprovalResponse["type"]>(
@@ -349,16 +283,30 @@ const HITLPrompt = () => {
 
   if (!interruptData) return null;
 
-  console.log("le interrupt", JSON.stringify(interruptData));
-
   // Capitalize first letter for display
   const capitalize = (str: string) =>
     str.charAt(0).toUpperCase() + str.slice(1);
 
   return (
-    <Box width="100%" flexDirection="column">
-      <Text>{interruptData.name}</Text>
-      <Text>{interruptData.description}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor="gray"
+      paddingX={2}
+      paddingY={1}
+      marginY={1}
+    >
+      <Text color="dim" dimColor>
+        plan review
+      </Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {interruptData.content.map((item, i) => (
+          <Box key={i} flexDirection="row" gap={1}>
+            <Text color="dim">{`${i + 1}.`.padEnd(3)}</Text>
+            <Text>{item}</Text>
+          </Box>
+        ))}
+      </Box>
       <Tabs
         onChange={(newTabKey) => {
           setDecision(newTabKey as HumanApprovalResponse["type"]);
@@ -372,24 +320,53 @@ const HITLPrompt = () => {
         ))}
       </Tabs>
       {decision === "cancel" && (
-        <TextInput
-          value={planFeedback ?? ""}
-          onChange={setPlanFeedback}
-          placeholder="Why are you rejecting this plan?"
-        />
+        <Box marginTop={1}>
+          <Text color="dim">feedback: </Text>
+          <TextInput
+            value={planFeedback ?? ""}
+            onChange={setPlanFeedback}
+            placeholder="Why are you rejecting this plan?"
+          />
+        </Box>
       )}
+    </Box>
+  );
+};
+
+const ExecutionProgress = () => {
+  const { taskStatuses, planOrder } = useMessagesContext();
+
+  if (planOrder.length === 0 || Object.keys(taskStatuses).length === 0) {
+    return null;
+  }
+
+  return (
+    <Box flexDirection="column" marginLeft={LABEL_WIDTH} marginY={1}>
+      {planOrder.map((task) => {
+        const status = taskStatuses[task] ?? "pending";
+        return (
+          <Box key={task} flexDirection="row" gap={2}>
+            {status === "done" && <Text color="green">✓</Text>}
+            {status === "running" && <Spinner />}
+            {status === "pending" && <Text color="dim">○</Text>}
+            <Text color={status === "pending" ? "dim" : undefined}>{task}</Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 };
 
 const UserInteraction = () => {
   const { exit } = useApp();
-  const { messages, sendMessage, interruptData } = useMessagesContext();
+  const { messages, sendMessage, interruptData, taskStatuses } =
+    useMessagesContext();
 
   // const [input, setInput] = useState("");
   const [input, setInput] = useState(
     "can you help me find the recent feats of kilian jornet",
   );
+  // const [input, setInput] = useState("hi");
 
   const [showShutdown, setShowShutdown] = useState(false);
 
@@ -406,16 +383,17 @@ const UserInteraction = () => {
       {/* Message history */}
       <Box flexGrow={1} flexDirection="column" gap={1}>
         {messages.map((message, index) => (
-          <Message
-            key={index}
-            message={message}
-            isLast={index === messages.length - 1}
-          />
+          <Message key={index} message={message} />
         ))}
-        {messages.length > 0 && <Box flexGrow={1} />}
       </Box>
 
-      <HITLPrompt />
+      {Object.keys(taskStatuses).length > 0 && (
+        <Box marginLeft={LABEL_WIDTH} marginY={1} flexDirection="column">
+          <Text color="dim">execution</Text>
+          <ExecutionProgress />
+        </Box>
+      )}
+      <PlanBox />
       {!interruptData && (
         <Box width="100%">
           <Text color="blue">$ </Text>
