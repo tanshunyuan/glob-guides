@@ -80,31 +80,12 @@ const PlanBox = () => {
   );
 };
 
-const ExecutionProgress = () => {
-  const { taskStatuses, planOrder } = useMessagesContext();
+const ConversationFeed = () => {
+  const { messages, planOrder, taskStatuses } = useMessagesContext();
 
-  if (planOrder.length === 0 || Object.keys(taskStatuses).length === 0) {
-    return null;
-  }
+  const hasExecutionProgress =
+    planOrder.length > 0 && Object.entries(taskStatuses).length > 0;
 
-  return (
-    <Box flexDirection="column">
-      {planOrder.map((task) => {
-        const status = taskStatuses[task] ?? "pending";
-        return (
-          <Box key={task} flexDirection="row" gap={2}>
-            {status === "done" && <Text color="green">✓</Text>}
-            {status === "running" && <Spinner />}
-            {status === "pending" && <Text color="dim">○</Text>}
-            <Text color={status === "pending" ? "dim" : undefined}>{task}</Text>
-          </Box>
-        );
-      })}
-    </Box>
-  );
-};
-
-const MessageHistory = ({ messages }: { messages: BaseMessage[] }) => {
   if (messages.length === 0) {
     return (
       <Box flexGrow={1} flexDirection="column">
@@ -116,38 +97,43 @@ const MessageHistory = ({ messages }: { messages: BaseMessage[] }) => {
   return (
     <Box flexGrow={1} flexDirection="column" gap={1}>
       {messages.map((message, index) => {
-        const role = HumanMessage.isInstance(message) ? "user" : "agent";
-
-        let label: string;
-        let labelColor: ComponentProps<typeof Text>["color"];
-
-        switch (role) {
-          case "user":
-            label = "user";
-            labelColor = "green";
-            break;
-          case "agent":
-          default:
-            label = "agent";
-            labelColor = "dim";
-            break;
-        }
+        const isUser = HumanMessage.isInstance(message);
 
         return (
-          <Box flexDirection="row" gap={1} key={index}>
-            <Text color={labelColor}>{label}</Text>
+          <Box key={index} flexDirection="row" gap={1}>
+            <Text color={isUser ? "green" : "dim"}>
+              {isUser ? "user" : "agent"}
+            </Text>
             <Text>{String(message.content)}</Text>
           </Box>
         );
       })}
+
+      {hasExecutionProgress ? (
+        <Box marginY={1} flexDirection={"column"}>
+          {planOrder.map((task) => {
+            const status = taskStatuses[task] ?? "pending";
+
+            return (
+              <Box key={task} flexDirection="row" gap={2}>
+                {status === "done" && <Text color="green">✓</Text>}
+                {status === "running" && <Spinner />}
+                {status === "pending" && <Text color="dim">○</Text>}
+                <Text color={status === "pending" ? "dim" : undefined}>
+                  {task}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+      ) : null}
     </Box>
   );
 };
 
 const UserInteraction = () => {
   const { exit } = useApp();
-  const { messages, sendMessage, uiState, interruptData } =
-    useMessagesContext();
+  const { sendMessage, uiState, interruptData } = useMessagesContext();
 
   // const [input, setInput] = useState("");
   const [input, setInput] = useState(
@@ -167,9 +153,7 @@ const UserInteraction = () => {
   });
   return (
     <Box flexDirection="column" height="100%">
-      <MessageHistory messages={messages} />
-      <ExecutionProgress />
-
+      <ConversationFeed />
       {interruptData ? <PlanBox /> : null}
       {uiState === "running" ? (
         <Box>

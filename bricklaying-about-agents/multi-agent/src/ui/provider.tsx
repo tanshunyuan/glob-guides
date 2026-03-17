@@ -52,6 +52,8 @@ export const MessagesProvider = ({
   const [uiState, setUiState] =
     useState<MessagesContextProps["uiState"]>("idle");
 
+  let hasStartedSummaryMessage = false;
+
   const handleStreamEvents = async (
     rawStreamEvent: IterableReadableStream<StreamEvent>,
   ) => {
@@ -95,11 +97,17 @@ export const MessagesProvider = ({
         eventName === "on_chat_model_stream" &&
         nodeName === "summariseNode"
       ) {
+        setPlanOrder([]);
         const chunk = eventData.chunk?.content;
         const token = typeof chunk === "string" ? chunk : "";
         if (!token) continue;
 
         setMessages((prev) => {
+          if (!hasStartedSummaryMessage) {
+            hasStartedSummaryMessage = true;
+            return [...prev, new AIMessage(token)];
+          }
+
           const last = prev.at(-1);
           if (last && AIMessage.isInstance(last)) {
             return [
@@ -107,6 +115,7 @@ export const MessagesProvider = ({
               new AIMessage(String(last.content) + token),
             ];
           }
+
           return [...prev, new AIMessage(token)];
         });
       }

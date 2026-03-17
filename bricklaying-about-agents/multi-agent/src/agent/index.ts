@@ -109,7 +109,7 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
 
       objective: ${state.objective}
 
-      limit yourself to one plans
+      limit yourself to one task in a plan
       `);
   } else {
     /**@todo shift feedback handling to user message, doesn't feel right to be here */
@@ -154,7 +154,6 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   state,
 ): Promise<Command<OverallState>> => {
   console.log("at humanApprovalNode");
-  console.log("humanApprovalNode.state ==> ", JSON.stringify(state));
   const interruptRequest: HumanApprovalRequest = {
     name: "Plan Review",
     description: "Review the plan suggested by the planner",
