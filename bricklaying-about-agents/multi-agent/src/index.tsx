@@ -51,78 +51,68 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
       const userMessage = new HumanMessage(input);
       setMessages((prev) => [...prev, userMessage]);
 
-      const response = await agent.stream(
+      const response = agent.streamEvents(
         {
           messages: [...messages, userMessage],
         },
         {
-          streamMode: ["messages", "updates", "custom"],
           configurable: {
             thread_id: "1234",
           },
+          version: "v2",
         },
       );
 
       // Add empty assistant message that we'll update
       setMessages((prev) => [...prev, new AIMessage("")]);
 
-      for await (const chunks of response) {
-        // console.log("le chunks", chunks);
-        const [mode, chunk] = chunks;
+      for await (const rawEvent of response) {
+        console.log("le rawEvent", rawEvent);
+        const eventName = rawEvent.event;
+        const eventData = rawEvent.data;
+        const nodeName = rawEvent.metadata.langgraph_node;
 
-        if (mode === "custom") {
-          const { type, response } = chunk;
+        if (eventName === "on_parser_end") {
+          let newContent = undefined;
+          const parsedOutput = eventData.output;
+          switch (nodeName) {
+            case "conversationNode":
+              const conversationOutput = parsedOutput as {
+                reason: string;
+                objective: string;
+              };
+              newContent = `The user is asking me to: ${conversationOutput.objective}`;
+              break;
+            case "plannerNode":
+              const plannerOutput = parsedOutput as { plan: string[] };
+              newContent = plannerOutput.plan
+                .map((item, index) => `${index + 1}. ${String(item)}`)
+                .join("\n");
+              break;
+          }
+          if (newContent === undefined) continue;
           setMessages((prev) => [
             // this removes the empty text set
             ...prev.slice(0, -1),
             // grabs the last item in the array, access it's content and append the new content
-            new AIMessage(prev.slice(-1)[0]?.content + response),
+            new AIMessage(prev.slice(-1)[0]?.content + newContent + "\n\n"),
           ]);
         }
 
-        // if (mode === "messages") {
-        //   const [token, metadata] = chunk;
-        //   // console.log(`node: ${metadata.langgraph_node}`);
-        //   // console.log(
-        //   //   `content: ${JSON.stringify(token.contentBlocks, null, 2)}`,
-        //   // );
-        //   const tokenContentBlocks = token.contentBlocks;
-        //   if (!tokenContentBlocks.length) continue;
+        if (eventName === "on_chain_stream" && eventData.chunk?.__interrupt__) {
+          const interruptContent = eventData.chunk?.__interrupt__;
+          const hasInterruptInfo =
+            Array.isArray(interruptContent) && interruptContent[0];
 
-        //   for (const tokenContent of tokenContentBlocks) {
-        //     if (tokenContent.type === "text") {
-        //       const newContent = tokenContent.text;
-        //       setMessages((prev) => [
-        //         // this removes the empty text set
-        //         ...prev.slice(0, -1),
-        //         // grabs the last item in the array, access it's content and append the new content
-        //         new AIMessage(prev.slice(-1)[0]?.content + newContent),
-        //       ]);
-        //     }
-        //   }
-        // }
-
-        if (mode === "updates") {
-          if ("__interrupt__" in chunk) {
-            console.log("interrupt chunk ", chunk);
-            const interruptContent = chunk[
-              "__interrupt__"
-            ] as unknown as Interrupt<HumanApprovalRequest>[];
-
-            const hasInterruptInfo =
-              Array.isArray(interruptContent) && interruptContent[0];
-
-            if (hasInterruptInfo) {
-              const interruptInfo = interruptContent[0]?.value;
-              setInterruptData(interruptInfo);
-            }
+          if (hasInterruptInfo) {
+            const interruptInfo = interruptContent[0]?.value;
+            setInterruptData(interruptInfo);
           }
         }
       }
     },
     [messages],
   );
-
   const resumeInterrupt = useCallback(async (data: HumanApprovalResponse) => {
     setInterruptData(undefined);
     const response = await agent.stream(
@@ -192,7 +182,12 @@ const MessagesProvider = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <MessagesContext.Provider
-      value={{ messages, interruptData, sendMessage, resumeInterrupt }}
+      value={{
+        messages,
+        interruptData,
+        sendMessage,
+        resumeInterrupt,
+      }}
     >
       {children}
     </MessagesContext.Provider>

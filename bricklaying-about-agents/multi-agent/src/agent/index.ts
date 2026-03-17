@@ -79,6 +79,7 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
     streaming: true,
   }).withStructuredOutput(schema);
 
+
   let systemPrompt;
   if (!state.feedback) {
     systemPrompt = new SystemMessage(`
@@ -101,11 +102,6 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
       `);
   }
   const response = await model.invoke([systemPrompt, ...state.messages]);
-
-  writer?.({
-    type: "plan_generated",
-    response: `Here are the steps taken by the agent:\n${response.plan.join("\n")}`,
-  });
 
   return new Command({
     update: {
