@@ -16,12 +16,14 @@ import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import z from "zod";
 
 const overallState = new StateSchema({
+  /**@description collection of messages between the user and agent */
   messages: MessagesValue,
   objective: z.string(),
+  /**@description plan consisting a list of tasks */
   plan: z.array(z.string()),
-  rawResults: z.record(
+  completedTaskAndResult: z.record(
     z.string(),
-    z.custom<AIMessage>((val) => val instanceof AIMessage),
+    z.string()
   ),
   feedback: z.string().optional(),
   result: z.string(),
@@ -99,14 +101,12 @@ const plannerNode: GraphNode<OverallState> = async (state, config) => {
   const model = new ChatOpenAI({
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
-    streaming: true,
   }).withStructuredOutput(schema);
 
   const systemPrompt = new SystemMessage(`
     You are planning the next step for the agent.
 
     Return a plan for the user's objective.
-    Limit yourself to one task in the plan.
   `);
 
   const plannerRequest = !state.feedback
@@ -157,7 +157,6 @@ const HUMAN_APPOVAL_NODE = "humanApprovalNode";
 const humanApprovalNode: GraphNode<OverallState> = async (
   state,
 ): Promise<Command<OverallState>> => {
-  console.log("at humanApprovalNode");
   const interruptRequest: HumanApprovalRequest = {
     name: "Plan Review",
     description: "Review the plan suggested by the planner",
@@ -188,28 +187,25 @@ const humanApprovalNode: GraphNode<OverallState> = async (
 
 const EXECUTOR_NODE = "executorNode";
 const executorNode: GraphNode<OverallState> = async (state, config) => {
-  console.log("at executorNode");
-  const result: Record<string, AIMessage> = {};
+  const taskAndResult: Record<string, string> = {};
   for (const task of state.plan) {
     dispatchCustomEvent("task_start", { task });
     const response = await researcherAgent.invoke({
       task,
     });
-    result[task] = response.result;
+    taskAndResult[task] = response.result.text
     dispatchCustomEvent("task_done", { task });
   }
   return new Command({
     update: {
-      rawResults: result,
+      completedTaskAndResult: taskAndResult,
     },
   });
 };
 
 const SUMMARISE_NODE = "summariseNode";
 const summariseNode: GraphNode<OverallState> = async (state, config) => {
-  console.log("at summariseNode");
-  const allRawResults = Object.values(state.rawResults);
-  const allResults = allRawResults.map((item) => item.content);
+  const allResults = Object.values(state.completedTaskAndResult);
   const model = new ChatOpenAI({
     model: "gpt-4.1-mini",
     apiKey: env.OPENAI_API_KEY,
