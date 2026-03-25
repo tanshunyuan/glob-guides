@@ -126,12 +126,14 @@ export const MessagesProvider = ({
         if (customEventName === "task_start") {
           setTaskStatuses((prev) => ({
             ...prev,
+            //@ts-ignore
             [customEventData.task]: "running",
           }));
         }
         if (customEventName === "task_done") {
           setTaskStatuses((prev) => ({
             ...prev,
+            //@ts-ignore
             [customEventData.task]: "done",
           }));
         }
