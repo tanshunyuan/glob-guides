@@ -21,10 +21,7 @@ const overallState = new StateSchema({
   objective: z.string(),
   /**@description plan consisting a list of tasks */
   plan: z.array(z.string()),
-  completedTaskAndResult: z.record(
-    z.string(),
-    z.string()
-  ),
+  completedTaskAndResult: z.record(z.string(), z.string()),
   feedback: z.string().optional(),
   result: z.string(),
 });
@@ -165,24 +162,21 @@ const humanApprovalNode: GraphNode<OverallState> = async (
   };
 
   const response: HumanApprovalResponse = interrupt(interruptRequest);
-  if (response.type === "accept") {
-    return new Command({
-      goto: EXECUTOR_NODE,
-    });
-  } else if (response.type === "cancel") {
-    return new Command({
-      goto: PLANNER_NODE,
-      update: {
-        feedback: response.feedback
-          ? `The user rejected the plan. Feedback: ${response.feedback}`
-          : "The user rejected the plan.",
-      },
-    });
+  switch (response.type) {
+    case "accept":
+      return new Command({
+        goto: EXECUTOR_NODE,
+      });
+    case "cancel":
+      return new Command({
+        goto: PLANNER_NODE,
+        update: {
+          feedback: response.feedback
+            ? `The user rejected the plan. Feedback: ${response.feedback}`
+            : "The user rejected the plan.",
+        },
+      });
   }
-
-  return new Command({
-    goto: END,
-  });
 };
 
 const EXECUTOR_NODE = "executorNode";
@@ -193,7 +187,7 @@ const executorNode: GraphNode<OverallState> = async (state, config) => {
     const response = await researcherAgent.invoke({
       task,
     });
-    taskAndResult[task] = response.result.text
+    taskAndResult[task] = response.result.text;
     dispatchCustomEvent("task_done", { task });
   }
   return new Command({
@@ -232,7 +226,7 @@ const workflow = new StateGraph(overallState)
   })
   .addNode(PLANNER_NODE, plannerNode)
   .addNode(HUMAN_APPOVAL_NODE, humanApprovalNode, {
-    ends: [EXECUTOR_NODE, PLANNER_NODE, END],
+    ends: [EXECUTOR_NODE, PLANNER_NODE],
   })
   .addNode(EXECUTOR_NODE, executorNode)
   .addNode(SUMMARISE_NODE, summariseNode)
