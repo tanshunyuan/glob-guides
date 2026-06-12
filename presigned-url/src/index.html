@@ -2,60 +2,140 @@
 <html>
     <head>
         <title>Object Storage Client</title>
+        <style>
+            button {
+                cursor: pointer;
+                padding: 8px 14px;
+            }
+
+            button:disabled {
+                cursor: not-allowed;
+                opacity: 0.7;
+            }
+
+            #status {
+                min-height: 24px;
+                margin-bottom: 16px;
+            }
+
+            #uploaded-image {
+                display: none;
+                max-width: 100%;
+                border-radius: 12px;
+                box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+            }
+        </style>
     </head>
     <body>
         <form id="object-storage-form">
-            <input name="content" type="file" />
-            <button type="submit">Submit</button>
+            <input
+                id="file-input"
+                name="content"
+                type="file"
+                accept="image/*"
+            />
+            <button id="submit-button" type="submit">Submit</button>
         </form>
+        <p id="status" role="status"></p>
+        <img id="uploaded-image" alt="Uploaded image" />
     </body>
     <script type="module">
         const BASE_URL = "http://localhost:8086";
         const objectStorageForm = document.getElementById(
             "object-storage-form",
         );
-        const handleFormSubmit = async (event) => {
-            event.preventDefault();
-            const formData = new FormData(objectStorageForm);
-            const fileContent = formData.get("content");
+        const fileInput = document.getElementById("file-input");
+        const submitButton = document.getElementById("submit-button");
+        const statusMessage = document.getElementById("status");
+        const uploadedImage = document.getElementById("uploaded-image");
 
-            const requestBody = {
-                name: fileContent.name,
-                contentType: fileContent.type,
-            };
-            console.log("requestBody ==> ", requestBody);
-            const response = await fetch(`${BASE_URL}/upload`, {
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                method: "POST",
-                body: JSON.stringify(requestBody),
-            });
+        const setButtonState = (text, isDisabled) => {
+            submitButton.textContent = text;
+            submitButton.disabled = isDisabled;
+        };
+
+        const getDownloadUrl = async (fileName) => {
+            const response = await fetch(
+                `${BASE_URL}/download?name=${encodeURIComponent(fileName)}`,
+            );
 
             if (!response.ok) {
                 throw new Error(
-                    `Failed to create signed URL: ${response.status}`,
+                    `Failed to create download URL: ${response.status}`,
                 );
             }
 
             const { signedUrl } = await response.json();
+            return signedUrl;
+        };
 
-            const uploadResponse = await fetch(signedUrl, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": fileContent.type,
-                },
-                body: fileContent,
-            });
+        const handleFormSubmit = async (event) => {
+            event.preventDefault();
 
-            if (!uploadResponse.ok) {
-                throw new Error(
-                    `Failed to upload file: ${uploadResponse.status}`,
-                );
+            const fileContent = fileInput.files[0];
+            if (!fileContent) {
+                statusMessage.textContent = "Pick an image first.";
+                return;
             }
 
-            console.log("Upload complete");
+            setButtonState("Loading...", true);
+            statusMessage.textContent = "Uploading image...";
+
+            try {
+                const requestBody = {
+                    name: fileContent.name,
+                    contentType: fileContent.type,
+                };
+
+                const response = await fetch(`${BASE_URL}/upload`, {
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    method: "POST",
+                    body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                    throw new Error(
+                        `Failed to create signed URL: ${response.status}`,
+                    );
+                }
+
+                const { signedUrl } = await response.json();
+
+                const uploadResponse = await fetch(signedUrl, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": fileContent.type,
+                    },
+                    body: fileContent,
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error(
+                        `Failed to upload file: ${uploadResponse.status}`,
+                    );
+                }
+
+                setButtonState("Done", true);
+                statusMessage.textContent = "Image uploaded.";
+
+                const downloadUrl = await getDownloadUrl(fileContent.name);
+                uploadedImage.src = downloadUrl;
+                uploadedImage.style.display = "block";
+            } catch (error) {
+                console.error(error);
+                setButtonState("Submit", false);
+                statusMessage.textContent = error.message;
+            }
         };
+
+        fileInput.addEventListener("change", () => {
+            setButtonState("Submit", false);
+            statusMessage.textContent = "";
+            uploadedImage.style.display = "none";
+            uploadedImage.removeAttribute("src");
+        });
 
         objectStorageForm.addEventListener("submit", handleFormSubmit);
     </script>

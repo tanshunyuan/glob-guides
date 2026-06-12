@@ -2,7 +2,7 @@ import express, { type Request, type Response } from "express";
 import cors from "cors";
 import { env } from "../env.js";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import z from "zod";
 
 const app = express();
@@ -44,8 +44,32 @@ app.post("/upload", async (req: Request, res: Response) => {
       const pretty = z.prettifyError(e);
       return res.status(400).json(pretty);
     }
-    console.log(e)
-    return res.status(500).json('Unexpected Error');
+    console.log(e);
+    return res.status(500).json("Unexpected Error");
+  }
+});
+
+app.get("/download", async (req: Request, res: Response) => {
+  try {
+    const name = z.string().min(1).parse(req.query.name);
+
+    const signedUrl = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket: "test-bucket",
+        Key: name,
+      }),
+      { expiresIn: 3600 },
+    );
+
+    return res.status(200).json({ signedUrl });
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      const pretty = z.prettifyError(e);
+      return res.status(400).json(pretty);
+    }
+    console.log(e);
+    return res.status(500).json("Unexpected Error");
   }
 });
 
